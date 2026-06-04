@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Local Music Player</title>
+    <link rel="icon" type="image/png" href="./favicon.png" />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <aside class="library-panel">
+        <div class="panel-header">
+          <div>
+            <p class="eyebrow">Library</p>
+            <h1>Music Player</h1>
+          </div>
+          <label class="folder-button">
+            <input id="folderInput" type="file" webkitdirectory multiple />
+            Open Folder
+          </label>
+          <button id="closeLibraryButton" class="mobile-drawer-close" type="button" aria-label="Close library">Close</button>
+        </div>
+
+        <div class="library-meta">
+          <span id="trackCount">No folder selected</span>
+          <span id="playModeLabel">Loop</span>
+        </div>
+
+        <div id="playlist" class="playlist" aria-label="Playlist"></div>
+      </aside>
+      <button id="libraryScrim" class="library-scrim" type="button" aria-label="Close library"></button>
+
+      <section class="player-panel">
+        <div class="now-playing">
+          <button id="openLibraryButton" class="mobile-library-button" type="button" aria-label="Open library">Library</button>
+          <div class="disc" aria-hidden="true">
+            <div class="disc-ring"></div>
+          </div>
+          <div class="track-copy">
+            <p class="eyebrow">Now Playing</p>
+            <h2 id="trackTitle">Choose a music folder</h2>
+            <p id="trackArtist">MP3, FLAC, WAV, M4A, OGG and matching LRC files are supported.</p>
+          </div>
+        </div>
+
+        <div id="lyricsStage" class="lyrics-stage">
+          <div id="lyrics" class="lyrics" aria-live="polite">
+            <p class="lyric-line active">Select a folder to load your playlist.</p>
+          </div>
+          <div id="artworkPanel" class="artwork-panel" aria-hidden="true">
+            <img id="trackArtwork" alt="" />
+          </div>
+        </div>
+
+        <div class="transport">
+          <div class="time-row">
+            <span id="currentTime">0:00</span>
+            <span id="duration">0:00</span>
+          </div>
+          <input
+            id="progress"
+            class="progress"
+            type="range"
+            min="0"
+            max="1000"
+            value="0"
+            aria-label="Playback progress"
+          />
+
+          <div class="controls">
+            <button id="prevButton" type="button" title="Previous song" aria-label="Previous song">Prev</button>
+            <button id="playButton" class="primary-control" type="button" title="Play or pause" aria-label="Play or pause">
+              Play
+            </button>
+            <button id="nextButton" type="button" title="Next song" aria-label="Next song">Next</button>
+            <button id="playModeButton" type="button" title="Switch play mode" aria-label="Switch play mode">Loop</button>
+          </div>
+        </div>
+
+        <audio id="audio"></audio>
+      </section>
+    </main>
+
+    <script src="./app.js"></script>
+  </body>
+</html>
