@@ -132,6 +132,36 @@ button:hover {
   border-bottom: 1px solid var(--line);
 }
 
+.search-panel {
+  flex: 0 0 auto;
+  padding: 0.75rem 1.25rem;
+  border-bottom: 1px solid var(--line);
+  background: #fbfcfe;
+}
+
+.search-panel input {
+  width: 100%;
+  min-height: 2.5rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--text);
+  padding: 0 0.85rem;
+  outline: none;
+}
+
+.search-panel input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(22, 138, 103, 0.13);
+}
+
+.empty-search {
+  margin: 0;
+  padding: 1rem 0.75rem;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
 .playlist {
   flex: 1 1 0;
   overflow-y: scroll;
@@ -477,6 +507,10 @@ button:disabled {
     display: inline-flex;
     flex: 0 0 auto;
     padding-inline: 0.7rem;
+  }
+
+  .search-panel {
+    display: none;
   }
 
   .transport {

@@ -3,6 +3,7 @@ const folderInput = document.querySelector("#folderInput");
 const playlistEl = document.querySelector("#playlist");
 const trackCountEl = document.querySelector("#trackCount");
 const playModeLabel = document.querySelector("#playModeLabel");
+const searchInput = document.querySelector("#searchInput");
 const trackTitle = document.querySelector("#trackTitle");
 const trackArtist = document.querySelector("#trackArtist");
 const lyricsStage = document.querySelector("#lyricsStage");
@@ -50,6 +51,7 @@ let currentArtworkObjectUrl = null;
 let pendingSeekTime = null;
 let lastStateSaveAt = 0;
 let isTouchSeeking = false;
+let searchQuery = "";
 
 function getExtension(fileName) {
   return fileName.split(".").pop().toLowerCase();
@@ -120,6 +122,24 @@ function seekFromTouchProgressEvent(event, shouldSave = true) {
   const rect = touchProgress.getBoundingClientRect();
   if (!rect.width) return;
   seekToRatio((event.clientX - rect.left) / rect.width, shouldSave);
+}
+
+function normalizeSearchText(text) {
+  return text
+    .toString()
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/\s+/g, "");
+}
+
+function trackSearchText(track) {
+  return normalizeSearchText([track.title, track.artist, track.name, track.searchText].filter(Boolean).join(" "));
+}
+
+function matchesSearch(track) {
+  if (!searchQuery) return true;
+  return trackSearchText(track).includes(searchQuery);
 }
 
 function getTrackKey(track) {
@@ -280,7 +300,11 @@ function parseLrc(text) {
 function renderPlaylist() {
   playlistEl.innerHTML = "";
 
-  tracks.forEach((track, index) => {
+  const visibleTracks = tracks
+    .map((track, index) => ({ track, index }))
+    .filter(({ track }) => matchesSearch(track));
+
+  visibleTracks.forEach(({ track, index }) => {
     const button = document.createElement("button");
     button.type = "button";
     button.disabled = track.playable === false;
@@ -299,7 +323,20 @@ function renderPlaylist() {
     playlistEl.appendChild(button);
   });
 
-  trackCountEl.textContent = tracks.length ? `${tracks.length} songs loaded` : "No songs loaded";
+  if (tracks.length && !visibleTracks.length) {
+    const empty = document.createElement("p");
+    empty.className = "empty-search";
+    empty.textContent = "No matching songs.";
+    playlistEl.appendChild(empty);
+  }
+
+  if (!tracks.length) {
+    trackCountEl.textContent = "No songs loaded";
+  } else if (searchQuery) {
+    trackCountEl.textContent = `${visibleTracks.length} of ${tracks.length} songs`;
+  } else {
+    trackCountEl.textContent = `${tracks.length} songs loaded`;
+  }
 }
 
 function openLibraryDrawer() {
@@ -553,6 +590,7 @@ function buildTracksFromFiles(files) {
       return {
         ...parsed,
         name: audioFile.name,
+        searchText: `${parsed.artist} ${parsed.title} ${audioFile.name}`,
         audioFile,
         lyricFile: lrcByBaseName.get(baseName(audioFile.name)),
         imageFile: imageByBaseName.get(baseName(audioFile.name)),
@@ -574,6 +612,7 @@ async function loadServerLibrary() {
       artist: track.artist,
       title: track.title,
       name: track.name,
+      searchText: track.searchText,
       audioUrl: track.audioUrl,
       lyricUrl: track.lyricUrl,
       imageUrl: track.imageUrl,
@@ -626,6 +665,11 @@ folderInput.addEventListener("change", async (event) => {
   }
 
   await loadTrack(0, false);
+});
+
+searchInput.addEventListener("input", () => {
+  searchQuery = normalizeSearchText(searchInput.value);
+  renderPlaylist();
 });
 
 playButton.addEventListener("click", togglePlayback);

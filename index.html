@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Local Music Player</title>
     <link rel="icon" type="image/png" href="./favicon.png" />
-    <link rel="stylesheet" href="./styles.css?v=20260606-touch-progress" />
+    <link rel="stylesheet" href="./styles.css?v=20260606-search" />
   </head>
   <body>
     <main class="app-shell">
@@ -25,6 +25,10 @@
         <div class="library-meta">
           <span id="trackCount">No folder selected</span>
           <span id="playModeLabel">Loop</span>
+        </div>
+
+        <div class="search-panel">
+          <input id="searchInput" type="search" placeholder="Search songs" autocomplete="off" aria-label="Search songs" />
         </div>
 
         <div id="playlist" class="playlist" aria-label="Playlist"></div>
@@ -97,6 +101,6 @@
       </section>
     </main>
 
-    <script src="./app.js?v=20260606-touch-progress"></script>
+    <script src="./app.js?v=20260606-search"></script>
   </body>
 </html>

@@ -7,6 +7,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
 from mutagen.id3 import ID3, ID3NoHeaderError
+from pypinyin import Style, lazy_pinyin
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -83,6 +84,7 @@ class MusicPlayerHandler(SimpleHTTPRequestHandler):
                     "audioUrl": f"/api/media?file={quote_path(audio_path.name)}",
                     "lyricUrl": f"/api/media?file={quote_path(lyric_path.name)}" if lyric_path else None,
                     "imageUrl": image_url,
+                    "searchText": build_search_text(artist, title, audio_path.stem),
                 }
             )
 
@@ -197,6 +199,15 @@ def quote_path(name: str) -> str:
     from urllib.parse import quote
 
     return quote(name)
+
+
+def build_search_text(*parts: str) -> str:
+    text = " ".join(part for part in parts if part)
+    full_pinyin = " ".join(lazy_pinyin(text, errors="ignore"))
+    compact_pinyin = full_pinyin.replace(" ", "")
+    initials = "".join(lazy_pinyin(text, style=Style.FIRST_LETTER, errors="ignore"))
+    search_tokens = [text.casefold(), full_pinyin.casefold(), compact_pinyin.casefold(), initials.casefold()]
+    return " ".join(dict.fromkeys(token for token in search_tokens if token))
 
 
 def guess_music_type(path: Path) -> str:
