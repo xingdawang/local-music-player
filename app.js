@@ -11,6 +11,9 @@ const trackArtwork = document.querySelector("#trackArtwork");
 const currentTimeEl = document.querySelector("#currentTime");
 const durationEl = document.querySelector("#duration");
 const progress = document.querySelector("#progress");
+const touchProgress = document.querySelector("#touchProgress");
+const touchProgressFill = document.querySelector("#touchProgressFill");
+const touchProgressThumb = document.querySelector("#touchProgressThumb");
 const prevButton = document.querySelector("#prevButton");
 const playButton = document.querySelector("#playButton");
 const nextButton = document.querySelector("#nextButton");
@@ -46,6 +49,7 @@ let historyCursor = -1;
 let currentArtworkObjectUrl = null;
 let pendingSeekTime = null;
 let lastStateSaveAt = 0;
+let isTouchSeeking = false;
 
 function getExtension(fileName) {
   return fileName.split(".").pop().toLowerCase();
@@ -88,6 +92,34 @@ function formatTime(seconds) {
   const minutes = Math.floor(seconds / 60);
   const remaining = Math.floor(seconds % 60).toString().padStart(2, "0");
   return `${minutes}:${remaining}`;
+}
+
+function updateProgressUi() {
+  const duration = audio.duration || 0;
+  const value = Number.isFinite(duration) && duration > 0 ? Math.round((audio.currentTime / duration) * 1000) : 0;
+  progress.value = value;
+  touchProgress.setAttribute("aria-valuenow", String(value));
+  touchProgressFill.style.width = `${value / 10}%`;
+  touchProgressThumb.style.left = `${value / 10}%`;
+}
+
+function seekToRatio(ratio, shouldSave = true) {
+  const duration = audio.duration || 0;
+  if (!Number.isFinite(duration) || duration <= 0) return;
+
+  const clampedRatio = Math.min(1, Math.max(0, ratio));
+  audio.currentTime = clampedRatio * duration;
+  currentTimeEl.textContent = formatTime(audio.currentTime);
+  updateProgressUi();
+  updateActiveLyric();
+  if (shouldSave) savePlaybackState();
+  updateMediaSessionPosition();
+}
+
+function seekFromTouchProgressEvent(event, shouldSave = true) {
+  const rect = touchProgress.getBoundingClientRect();
+  if (!rect.width) return;
+  seekToRatio((event.clientX - rect.left) / rect.width, shouldSave);
 }
 
 function getTrackKey(track) {
@@ -193,6 +225,32 @@ function setupMediaSession() {
     savePlaybackState();
     updateMediaSessionPosition();
   });
+}
+
+function shouldIgnoreShortcut(event) {
+  const target = event.target;
+  if (!(target instanceof HTMLElement)) return false;
+  if (target.isContentEditable) return true;
+  if (target.getAttribute("role") === "slider") return true;
+
+  return ["INPUT", "TEXTAREA", "SELECT", "BUTTON"].includes(target.tagName);
+}
+
+function togglePlayMode() {
+  playMode = playMode === "shuffle" ? "loop" : "shuffle";
+  savePlaybackState();
+  updateButtons();
+}
+
+async function togglePlayback() {
+  if (!tracks.length) return;
+  if (currentIndex === -1) await loadTrack(0);
+
+  if (audio.paused) {
+    await startPlayback();
+  } else {
+    audio.pause();
+  }
 }
 
 function parseLrc(text) {
@@ -354,6 +412,7 @@ async function loadTrack(index, shouldPlay = false, options = {}) {
   trackTitle.textContent = track.title;
   trackArtist.textContent = track.artist;
   progress.value = 0;
+  updateProgressUi();
   currentTimeEl.textContent = "0:00";
   durationEl.textContent = "0:00";
 
@@ -569,37 +628,76 @@ folderInput.addEventListener("change", async (event) => {
   await loadTrack(0, false);
 });
 
-playButton.addEventListener("click", async () => {
-  if (!tracks.length) return;
-  if (currentIndex === -1) await loadTrack(0);
-  if (audio.paused) {
-    await startPlayback();
-  } else {
-    audio.pause();
-  }
-});
+playButton.addEventListener("click", togglePlayback);
 
 prevButton.addEventListener("click", previousTrack);
 nextButton.addEventListener("click", () => nextTrack(true));
 
-playModeButton.addEventListener("click", () => {
-  playMode = playMode === "shuffle" ? "loop" : "shuffle";
-  savePlaybackState();
-  updateButtons();
-});
+playModeButton.addEventListener("click", togglePlayMode);
 
 progress.addEventListener("input", () => {
   isSeeking = true;
   const duration = audio.duration || 0;
   currentTimeEl.textContent = formatTime((Number(progress.value) / 1000) * duration);
+  touchProgress.setAttribute("aria-valuenow", progress.value);
+  touchProgressFill.style.width = `${Number(progress.value) / 10}%`;
+  touchProgressThumb.style.left = `${Number(progress.value) / 10}%`;
 });
 
 progress.addEventListener("change", () => {
   const duration = audio.duration || 0;
   audio.currentTime = (Number(progress.value) / 1000) * duration;
   isSeeking = false;
+  updateProgressUi();
   updateActiveLyric();
   savePlaybackState();
+});
+
+touchProgress.addEventListener("pointerdown", (event) => {
+  if (!Number.isFinite(audio.duration) || audio.duration <= 0) return;
+  isTouchSeeking = true;
+  touchProgress.setPointerCapture(event.pointerId);
+  seekFromTouchProgressEvent(event, false);
+});
+
+touchProgress.addEventListener("pointermove", (event) => {
+  if (!isTouchSeeking) return;
+  seekFromTouchProgressEvent(event, false);
+});
+
+touchProgress.addEventListener("pointerup", (event) => {
+  if (!isTouchSeeking) return;
+  isTouchSeeking = false;
+  touchProgress.releasePointerCapture(event.pointerId);
+  seekFromTouchProgressEvent(event, true);
+});
+
+touchProgress.addEventListener("pointercancel", (event) => {
+  isTouchSeeking = false;
+  if (touchProgress.hasPointerCapture(event.pointerId)) {
+    touchProgress.releasePointerCapture(event.pointerId);
+  }
+});
+
+touchProgress.addEventListener("keydown", (event) => {
+  const duration = audio.duration || 0;
+  if (!Number.isFinite(duration) || duration <= 0) return;
+
+  if (event.key === "ArrowLeft" || event.key === "ArrowDown") {
+    event.preventDefault();
+    audio.currentTime = Math.max(0, audio.currentTime - 5);
+  } else if (event.key === "ArrowRight" || event.key === "ArrowUp") {
+    event.preventDefault();
+    audio.currentTime = Math.min(duration, audio.currentTime + 5);
+  } else {
+    return;
+  }
+
+  currentTimeEl.textContent = formatTime(audio.currentTime);
+  updateProgressUi();
+  updateActiveLyric();
+  savePlaybackState();
+  updateMediaSessionPosition();
 });
 
 audio.addEventListener("loadedmetadata", () => {
@@ -609,16 +707,17 @@ audio.addEventListener("loadedmetadata", () => {
     const duration = Number.isFinite(audio.duration) ? audio.duration : 0;
     audio.currentTime = duration > 0 ? Math.min(pendingSeekTime, Math.max(0, duration - 0.25)) : pendingSeekTime;
     currentTimeEl.textContent = formatTime(audio.currentTime);
-    progress.value = duration > 0 ? Math.round((audio.currentTime / duration) * 1000) : 0;
+    updateProgressUi();
     pendingSeekTime = null;
     savePlaybackState();
   }
+  updateProgressUi();
   updateMediaSessionPosition();
 });
 
 audio.addEventListener("timeupdate", () => {
-  if (!isSeeking && Number.isFinite(audio.duration) && audio.duration > 0) {
-    progress.value = Math.round((audio.currentTime / audio.duration) * 1000);
+  if (!isSeeking && !isTouchSeeking && Number.isFinite(audio.duration) && audio.duration > 0) {
+    updateProgressUi();
   }
   currentTimeEl.textContent = formatTime(audio.currentTime);
   updateActiveLyric();
@@ -638,8 +737,26 @@ closeLibraryButton.addEventListener("click", closeLibraryDrawer);
 libraryScrim.addEventListener("click", closeLibraryDrawer);
 
 document.addEventListener("keydown", (event) => {
+  if (shouldIgnoreShortcut(event)) return;
+
   if (event.key === "Escape") {
     closeLibraryDrawer();
+    return;
+  }
+
+  if (event.key === " " || event.code === "Space") {
+    event.preventDefault();
+    togglePlayback();
+    return;
+  }
+
+  const shortcut = event.key.toLowerCase();
+  if (shortcut === "p") {
+    previousSong(true);
+  } else if (shortcut === "n") {
+    nextTrack(true);
+  } else if (shortcut === "r") {
+    togglePlayMode();
   }
 });
 
