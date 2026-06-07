@@ -23,6 +23,8 @@ const playerPanel = document.querySelector(".player-panel");
 const appShell = document.querySelector(".app-shell");
 const openLibraryButton = document.querySelector("#openLibraryButton");
 const closeLibraryButton = document.querySelector("#closeLibraryButton");
+const collapseLibraryButton = document.querySelector("#collapseLibraryButton");
+const expandLibraryButton = document.querySelector("#expandLibraryButton");
 const libraryScrim = document.querySelector("#libraryScrim");
 
 const AUDIO_EXTENSIONS = new Set(["mp3", "flac", "wav", "m4a", "ogg", "aac"]);
@@ -38,6 +40,7 @@ const AUDIO_MIME_BY_EXTENSION = {
 const desktopArtworkQuery = window.matchMedia("(min-width: 821px)");
 const mobileLayoutQuery = window.matchMedia("(max-width: 820px)");
 const PLAYBACK_STATE_KEY = "localMusicPlayer.playbackState";
+const LIBRARY_COLLAPSED_KEY = "localMusicPlayer.libraryCollapsed";
 
 let tracks = [];
 let currentIndex = -1;
@@ -347,6 +350,19 @@ function openLibraryDrawer() {
 function closeLibraryDrawer() {
   appShell.classList.remove("library-drawer-open");
   openLibraryButton.setAttribute("aria-expanded", "false");
+}
+
+function setLibraryCollapsed(isCollapsed, shouldSave = true) {
+  appShell.classList.toggle("library-collapsed", isCollapsed);
+  collapseLibraryButton.setAttribute("aria-expanded", String(!isCollapsed));
+  expandLibraryButton.setAttribute("aria-expanded", String(!isCollapsed));
+  if (shouldSave) {
+    localStorage.setItem(LIBRARY_COLLAPSED_KEY, isCollapsed ? "true" : "false");
+  }
+}
+
+function restoreLibraryCollapsed() {
+  setLibraryCollapsed(localStorage.getItem(LIBRARY_COLLAPSED_KEY) === "true", false);
 }
 
 function renderLyrics() {
@@ -778,6 +794,8 @@ audio.addEventListener("ended", () => nextTrack(true));
 trackArtwork.addEventListener("error", clearArtwork);
 openLibraryButton.addEventListener("click", openLibraryDrawer);
 closeLibraryButton.addEventListener("click", closeLibraryDrawer);
+collapseLibraryButton.addEventListener("click", () => setLibraryCollapsed(true));
+expandLibraryButton.addEventListener("click", () => setLibraryCollapsed(false));
 libraryScrim.addEventListener("click", closeLibraryDrawer);
 
 document.addEventListener("keydown", (event) => {
@@ -824,6 +842,7 @@ mobileLayoutQuery.addEventListener("change", () => {
   closeLibraryDrawer();
 });
 
+restoreLibraryCollapsed();
 setupMediaSession();
 updateButtons();
 loadServerLibrary();

@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Local Music Player</title>
     <link rel="icon" type="image/png" href="./favicon.png" />
-    <link rel="stylesheet" href="./styles.css?v=20260606-search" />
+    <link rel="stylesheet" href="./styles.css?v=20260607-library-collapse" />
   </head>
   <body>
     <main class="app-shell">
@@ -20,6 +20,7 @@
             Open Folder
           </label>
           <button id="closeLibraryButton" class="mobile-drawer-close" type="button" aria-label="Close library">Close</button>
+          <button id="collapseLibraryButton" class="desktop-library-toggle" type="button" aria-label="Hide library">Hide</button>
         </div>
 
         <div class="library-meta">
@@ -33,6 +34,9 @@
 
         <div id="playlist" class="playlist" aria-label="Playlist"></div>
       </aside>
+      <button id="expandLibraryButton" class="desktop-library-rail" type="button" aria-label="Show library">
+        <span>Library</span>
+      </button>
       <button id="libraryScrim" class="library-scrim" type="button" aria-label="Close library"></button>
 
       <section class="player-panel">
@@ -101,6 +105,6 @@
       </section>
     </main>
 
-    <script src="./app.js?v=20260606-search"></script>
+    <script src="./app.js?v=20260607-library-collapse"></script>
   </body>
 </html>
