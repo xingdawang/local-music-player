@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import json
 import mimetypes
+import shutil
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs, unquote, urlparse
+from urllib.parse import parse_qs, unquote, urlencode, urlparse
+from urllib.request import Request, urlopen
 
 from mutagen.id3 import ID3, ID3NoHeaderError
 from pypinyin import Style, lazy_pinyin
@@ -14,6 +16,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_MUSIC_DIR = Path("/Users/xingdawang/Music/Converted Music")
 AUDIO_EXTENSIONS = {".mp3", ".flac", ".wav", ".m4a", ".ogg", ".aac"}
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".avif"}
+ARTWORK_SEARCH_TIMEOUT = 8
 
 
 class MusicPlayerHandler(SimpleHTTPRequestHandler):
@@ -71,6 +74,8 @@ class MusicPlayerHandler(SimpleHTTPRequestHandler):
             playable = content_type.startswith("audio/")
             image_url = f"/api/media?file={quote_path(image_path.name)}" if image_path else None
             if not image_url and has_embedded_artwork(audio_path):
+                image_url = f"/api/artwork?file={quote_path(audio_path.name)}"
+            if not image_url:
                 image_url = f"/api/artwork?file={quote_path(audio_path.name)}"
 
             tracks.append(
@@ -170,11 +175,7 @@ class MusicPlayerHandler(SimpleHTTPRequestHandler):
         if not requested.exists() or not requested.is_file():
             self.send_error(404, "File not found")
             return
-        if requested.suffix.lower() != ".mp3":
-            self.send_error(415, "Embedded artwork is only supported for MP3 files")
-            return
-
-        artwork = extract_embedded_artwork(requested)
+        artwork = find_artwork_for_audio(requested)
         if not artwork:
             self.send_error(404, "Artwork not found")
             return
@@ -199,6 +200,14 @@ def quote_path(name: str) -> str:
     from urllib.parse import quote
 
     return quote(name)
+
+
+def local_artwork_path(audio_path: Path) -> Path | None:
+    for extension in IMAGE_EXTENSIONS:
+        candidate = audio_path.with_suffix(extension)
+        if candidate.exists() and candidate.is_file():
+            return candidate
+    return None
 
 
 def build_search_text(*parts: str) -> str:
@@ -259,6 +268,75 @@ def extract_embedded_artwork(path: Path) -> tuple[str, bytes] | None:
 
 def has_embedded_artwork(path: Path) -> bool:
     return extract_embedded_artwork(path) is not None
+
+
+def find_artwork_for_audio(audio_path: Path) -> tuple[str, bytes] | None:
+    local_path = local_artwork_path(audio_path)
+    if local_path:
+        return guess_media_type(local_path), local_path.read_bytes()
+
+    if audio_path.suffix.lower() == ".mp3":
+        embedded = extract_embedded_artwork(audio_path)
+        if embedded:
+            return embedded
+
+    downloaded_path = download_online_artwork(audio_path)
+    if downloaded_path:
+        return guess_media_type(downloaded_path), downloaded_path.read_bytes()
+
+    return None
+
+
+def download_online_artwork(audio_path: Path) -> Path | None:
+    artist, title = parse_track_name(audio_path.stem)
+    query = f"{artist} {title}".strip()
+    if not query or artist == "Unknown Artist":
+        query = audio_path.stem
+
+    artwork_url = search_itunes_artwork(query)
+    if not artwork_url:
+        return None
+
+    target_path = audio_path.with_suffix(".jpg")
+    if target_path.exists():
+        return target_path
+
+    request = Request(artwork_url, headers={"User-Agent": "LocalMusicPlayer/1.0"})
+    try:
+        with urlopen(request, timeout=ARTWORK_SEARCH_TIMEOUT) as response:
+            content_type = response.headers.get("Content-Type", "")
+            if not content_type.startswith("image/"):
+                return None
+            with target_path.open("wb") as output:
+                shutil.copyfileobj(response, output)
+    except Exception:
+        if target_path.exists():
+            try:
+                target_path.unlink()
+            except OSError:
+                pass
+        return None
+
+    return target_path
+
+
+def search_itunes_artwork(query: str) -> str | None:
+    params = urlencode({"term": query, "entity": "song", "media": "music", "limit": 1})
+    request = Request(f"https://itunes.apple.com/search?{params}", headers={"User-Agent": "LocalMusicPlayer/1.0"})
+    try:
+        with urlopen(request, timeout=ARTWORK_SEARCH_TIMEOUT) as response:
+            payload = json.load(response)
+    except Exception:
+        return None
+
+    results = payload.get("results")
+    if not isinstance(results, list) or not results:
+        return None
+
+    artwork_url = results[0].get("artworkUrl100")
+    if not isinstance(artwork_url, str) or not artwork_url:
+        return None
+    return artwork_url.replace("100x100bb", "600x600bb")
 
 
 if __name__ == "__main__":

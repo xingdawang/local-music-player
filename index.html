@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Local Music Player</title>
     <link rel="icon" type="image/png" href="./favicon.png" />
-    <link rel="stylesheet" href="./styles.css?v=20260607-library-collapse" />
+    <link rel="stylesheet" href="./styles.css?v=20260610-controls-order" />
   </head>
   <body>
     <main class="app-shell">
@@ -40,64 +40,77 @@
       <button id="libraryScrim" class="library-scrim" type="button" aria-label="Close library"></button>
 
       <section class="player-panel">
-        <div class="now-playing">
+        <div class="jukebox-stage">
           <button id="openLibraryButton" class="mobile-library-button" type="button" aria-label="Open library">Library</button>
-          <div class="disc" aria-hidden="true">
-            <div class="disc-ring"></div>
-          </div>
-          <div class="track-copy">
-            <p class="eyebrow">Now Playing</p>
-            <h2 id="trackTitle">Choose a music folder</h2>
-            <p id="trackArtist">MP3, FLAC, WAV, M4A, OGG and matching LRC files are supported.</p>
-          </div>
-        </div>
 
-        <div id="lyricsStage" class="lyrics-stage">
-          <div id="lyrics" class="lyrics" aria-live="polite">
-            <p class="lyric-line active">Select a folder to load your playlist.</p>
-          </div>
-          <div id="artworkPanel" class="artwork-panel" aria-hidden="true">
-            <img id="trackArtwork" alt="" />
-          </div>
-        </div>
+          <div class="deck-panel">
+            <div class="record-frame" role="button" tabindex="0" aria-label="Show lyrics">
+              <div class="tonearm" aria-hidden="true"></div>
+              <div class="disc" aria-hidden="true">
+                <img id="trackArtwork" class="record-art" alt="" />
+                <div class="disc-ring"></div>
+              </div>
+            </div>
 
-        <div class="transport">
-          <div class="time-row">
-            <span id="currentTime">0:00</span>
-            <span id="duration">0:00</span>
-          </div>
-          <input
-            id="progress"
-            class="progress"
-            type="range"
-            min="0"
-            max="1000"
-            value="0"
-            aria-label="Playback progress"
-          />
-          <div
-            id="touchProgress"
-            class="touch-progress"
-            role="slider"
-            tabindex="0"
-            aria-label="Playback progress"
-            aria-valuemin="0"
-            aria-valuemax="1000"
-            aria-valuenow="0"
-          >
-            <div class="touch-progress-track">
-              <div id="touchProgressFill" class="touch-progress-fill"></div>
-              <div id="touchProgressThumb" class="touch-progress-thumb"></div>
+            <div class="track-copy">
+              <h2 id="trackTitle">Choose a music folder</h2>
+              <p id="trackArtist">MP3, FLAC, WAV, M4A, OGG and matching LRC files are supported.</p>
+            </div>
+
+            <div class="transport">
+              <div class="controls">
+                <button id="prevButton" class="round-control side-control" type="button" title="Previous song" aria-label="Previous song">
+                  <span class="control-icon prev-icon" aria-hidden="true"></span>
+                </button>
+                <button id="playButton" class="round-control primary-control" type="button" title="Play" aria-label="Play">
+                  <span class="play-icon" aria-hidden="true"></span>
+                  <span class="pause-icon" aria-hidden="true"></span>
+                </button>
+                <button id="nextButton" class="round-control side-control" type="button" title="Next song" aria-label="Next song">
+                  <span class="control-icon next-icon" aria-hidden="true"></span>
+                </button>
+                <button id="playModeButton" class="mode-control" type="button" title="Repeat playlist" aria-label="Repeat playlist">
+                  <span class="mode-icon loop-icon" aria-hidden="true"></span>
+                  <span class="mode-icon random-icon" aria-hidden="true"><span></span></span>
+                  <span class="control-label">Loop</span>
+                </button>
+              </div>
+
+              <div class="time-row">
+                <span id="currentTime">0:00</span>
+                <span id="duration">0:00</span>
+              </div>
+              <input
+                id="progress"
+                class="progress"
+                type="range"
+                min="0"
+                max="1000"
+                value="0"
+                aria-label="Playback progress"
+              />
+              <div
+                id="touchProgress"
+                class="touch-progress"
+                role="slider"
+                tabindex="0"
+                aria-label="Playback progress"
+                aria-valuemin="0"
+                aria-valuemax="1000"
+                aria-valuenow="0"
+              >
+                <div class="touch-progress-track">
+                  <div id="touchProgressFill" class="touch-progress-fill"></div>
+                  <div id="touchProgressThumb" class="touch-progress-thumb"></div>
+                </div>
+              </div>
             </div>
           </div>
 
-          <div class="controls">
-            <button id="prevButton" type="button" title="Previous song" aria-label="Previous song">Prev</button>
-            <button id="playButton" class="primary-control" type="button" title="Play or pause" aria-label="Play or pause">
-              Play
-            </button>
-            <button id="nextButton" type="button" title="Next song" aria-label="Next song">Next</button>
-            <button id="playModeButton" type="button" title="Switch play mode" aria-label="Switch play mode">Loop</button>
+          <div id="lyricsStage" class="lyrics-stage">
+            <div id="lyrics" class="lyrics" aria-live="polite">
+              <p class="lyric-line active">Select a folder to load your playlist.</p>
+            </div>
           </div>
         </div>
 
@@ -105,6 +118,6 @@
       </section>
     </main>
 
-    <script src="./app.js?v=20260607-library-collapse"></script>
+    <script src="./app.js?v=20260610-artwork-cache"></script>
   </body>
 </html>

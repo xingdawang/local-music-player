@@ -9,6 +9,8 @@ const trackArtist = document.querySelector("#trackArtist");
 const lyricsStage = document.querySelector("#lyricsStage");
 const lyricsEl = document.querySelector("#lyrics");
 const trackArtwork = document.querySelector("#trackArtwork");
+const recordFrame = document.querySelector(".record-frame");
+const tonearm = document.querySelector(".tonearm");
 const currentTimeEl = document.querySelector("#currentTime");
 const durationEl = document.querySelector("#duration");
 const progress = document.querySelector("#progress");
@@ -55,6 +57,24 @@ let pendingSeekTime = null;
 let lastStateSaveAt = 0;
 let isTouchSeeking = false;
 let searchQuery = "";
+let lyricSelectionIndex = -1;
+let lyricSelectionTimer = null;
+let isProgrammaticLyricScroll = false;
+
+function swingTonearm() {
+  tonearm.classList.remove("is-swinging");
+  void tonearm.offsetWidth;
+  tonearm.classList.add("is-swinging");
+}
+
+function openMobileLyrics() {
+  if (!mobileLayoutQuery.matches) return;
+  playerPanel.classList.add("mobile-lyrics-open");
+}
+
+function closeMobileLyrics() {
+  playerPanel.classList.remove("mobile-lyrics-open");
+}
 
 function getExtension(fileName) {
   return fileName.split(".").pop().toLowerCase();
@@ -125,6 +145,75 @@ function seekFromTouchProgressEvent(event, shouldSave = true) {
   const rect = touchProgress.getBoundingClientRect();
   if (!rect.width) return;
   seekToRatio((event.clientX - rect.left) / rect.width, shouldSave);
+}
+
+function formatLyricTime(seconds) {
+  return formatTime(seconds);
+}
+
+function clearLyricSelectionTimer() {
+  if (!lyricSelectionTimer) return;
+  clearTimeout(lyricSelectionTimer);
+  lyricSelectionTimer = null;
+}
+
+function setLyricSelection(index) {
+  if (!lyrics[index]) return;
+  if (lyricSelectionIndex !== -1 && lyricSelectionIndex !== index) {
+    lyricsEl.querySelector(`[data-index="${lyricSelectionIndex}"]`)?.classList.remove("selected");
+  }
+  lyricSelectionIndex = index;
+  lyricsEl.querySelector(`[data-index="${index}"]`)?.classList.add("selected");
+}
+
+function clearLyricSelection() {
+  if (lyricSelectionIndex !== -1) {
+    lyricsEl.querySelector(`[data-index="${lyricSelectionIndex}"]`)?.classList.remove("selected");
+  }
+  lyricSelectionIndex = -1;
+  clearLyricSelectionTimer();
+}
+
+function scrollActiveLyricIntoView() {
+  const activeLine = lyricsEl.querySelector(`[data-index="${activeLyricIndex}"]`);
+  if (!activeLine) return;
+  isProgrammaticLyricScroll = true;
+  activeLine.scrollIntoView({ block: "center", behavior: "smooth" });
+  window.setTimeout(() => {
+    isProgrammaticLyricScroll = false;
+  }, 650);
+}
+
+function scheduleReturnToActiveLyric() {
+  clearLyricSelectionTimer();
+  lyricSelectionTimer = window.setTimeout(() => {
+    clearLyricSelection();
+    scrollActiveLyricIntoView();
+  }, 3000);
+}
+
+function selectLyricNearCenter() {
+  if (isProgrammaticLyricScroll || !lyrics.length) return;
+
+  const containerRect = lyricsEl.getBoundingClientRect();
+  const centerY = containerRect.top + containerRect.height / 2;
+  const lines = Array.from(lyricsEl.querySelectorAll(".lyric-line"));
+  let closestIndex = -1;
+  let closestDistance = Number.POSITIVE_INFINITY;
+
+  for (const line of lines) {
+    const rect = line.getBoundingClientRect();
+    const lineCenter = rect.top + rect.height / 2;
+    const distance = Math.abs(lineCenter - centerY);
+    if (distance < closestDistance) {
+      closestDistance = distance;
+      closestIndex = Number(line.dataset.index);
+    }
+  }
+
+  if (closestIndex === -1) return;
+  setLyricSelection(closestIndex);
+  scheduleReturnToActiveLyric();
 }
 
 function normalizeSearchText(text) {
@@ -237,8 +326,14 @@ function updateMediaSessionPlaybackState() {
 function setupMediaSession() {
   if (!("mediaSession" in navigator)) return;
 
-  setMediaSessionAction("play", () => startPlayback());
-  setMediaSessionAction("pause", () => audio.pause());
+  setMediaSessionAction("play", () => {
+    swingTonearm();
+    startPlayback();
+  });
+  setMediaSessionAction("pause", () => {
+    swingTonearm();
+    audio.pause();
+  });
   setMediaSessionAction("previoustrack", () => previousSong(true));
   setMediaSessionAction("nexttrack", () => nextTrack(true));
   setMediaSessionAction("seekto", (details) => {
@@ -267,6 +362,7 @@ function togglePlayMode() {
 
 async function togglePlayback() {
   if (!tracks.length) return;
+  swingTonearm();
   if (currentIndex === -1) await loadTrack(0);
 
   if (audio.paused) {
@@ -368,6 +464,7 @@ function restoreLibraryCollapsed() {
 function renderLyrics() {
   lyricsEl.innerHTML = "";
   activeLyricIndex = -1;
+  clearLyricSelection();
 
   if (!lyrics.length) {
     const line = document.createElement("p");
@@ -378,10 +475,27 @@ function renderLyrics() {
   }
 
   lyrics.forEach((lyric, index) => {
-    const line = document.createElement("p");
+    const line = document.createElement("div");
     line.className = `lyric-line${index === 0 ? " active" : ""}`;
     line.dataset.index = index;
-    line.textContent = lyric.text;
+    line.innerHTML = `
+      <span class="lyric-time">${formatLyricTime(lyric.time)}</span>
+      <span class="lyric-text">${lyric.text}</span>
+      <button class="lyric-seek-button" type="button" aria-label="Play from ${formatLyricTime(lyric.time)}">
+        <span aria-hidden="true"></span>
+      </button>
+    `;
+    line.querySelector(".lyric-seek-button").addEventListener("click", (event) => {
+      event.stopPropagation();
+      clearLyricSelection();
+      audio.currentTime = lyric.time;
+      currentTimeEl.textContent = formatTime(audio.currentTime);
+      updateProgressUi();
+      updateActiveLyric();
+      updateMediaSessionPosition();
+      savePlaybackState();
+      startPlayback();
+    });
     lyricsEl.appendChild(line);
   });
 
@@ -411,6 +525,7 @@ async function loadLyrics(track) {
 function clearArtwork() {
   trackArtwork.removeAttribute("src");
   lyricsStage.classList.remove("has-artwork");
+  playerPanel.classList.remove("has-artwork");
 
   if (currentArtworkObjectUrl) {
     URL.revokeObjectURL(currentArtworkObjectUrl);
@@ -418,11 +533,20 @@ function clearArtwork() {
   }
 }
 
+function artworkUrlFromMediaUrl(mediaUrl) {
+  if (!mediaUrl) return "";
+  const url = new URL(mediaUrl, window.location.href);
+  if (url.pathname !== "/api/media") return "";
+  const fileName = url.searchParams.get("file");
+  if (!fileName) return "";
+  return `/api/artwork?file=${encodeURIComponent(fileName)}`;
+}
+
 async function loadArtwork(track) {
   clearArtwork();
-  if (!desktopArtworkQuery.matches || !track) return;
+  if (!track) return;
 
-  let artworkUrl = track.imageUrl || "";
+  let artworkUrl = track.imageUrl || artworkUrlFromMediaUrl(track.audioUrl);
   if (!artworkUrl && track.imageFile) {
     currentArtworkObjectUrl = URL.createObjectURL(track.imageFile);
     artworkUrl = currentArtworkObjectUrl;
@@ -431,6 +555,7 @@ async function loadArtwork(track) {
 
   trackArtwork.src = artworkUrl;
   lyricsStage.classList.add("has-artwork");
+  playerPanel.classList.add("has-artwork");
 }
 
 function recordHistory(index) {
@@ -498,13 +623,14 @@ function updateButtons() {
   playButton.disabled = !hasTracks;
   prevButton.disabled = !hasTracks;
   nextButton.disabled = !hasTracks;
-  playButton.textContent = audio.paused ? "Play" : "Pause";
+  playButton.title = audio.paused ? "Play" : "Pause";
+  playButton.setAttribute("aria-label", audio.paused ? "Play" : "Pause");
   const isShuffle = playMode === "shuffle";
-  playModeButton.textContent = isShuffle ? "Random" : "Loop";
-  playModeButton.title = isShuffle ? "Random play" : "Loop playlist";
-  playModeButton.setAttribute("aria-label", isShuffle ? "Random play" : "Loop playlist");
+  playModeButton.title = isShuffle ? "Random play" : "Repeat playlist";
+  playModeButton.setAttribute("aria-label", isShuffle ? "Random play" : "Repeat playlist");
+  playModeButton.querySelector(".control-label").textContent = isShuffle ? "Random" : "Repeat";
   playModeButton.classList.toggle("is-active", isShuffle);
-  playModeLabel.textContent = isShuffle ? "Random" : "Loop";
+  playModeLabel.textContent = isShuffle ? "Random" : "Repeat";
   playerPanel.classList.toggle("is-playing", !audio.paused);
   updateMediaSessionPlaybackState();
 }
@@ -524,8 +650,10 @@ function updateActiveLyric() {
   lyricsEl.querySelector(".lyric-line.active")?.classList.remove("active");
   const activeLine = lyricsEl.querySelector(`[data-index="${nextIndex}"]`);
   activeLine?.classList.add("active");
-  activeLine?.scrollIntoView({ block: "center", behavior: "smooth" });
   activeLyricIndex = nextIndex;
+  if (lyricSelectionIndex === -1) {
+    scrollActiveLyricIntoView();
+  }
 }
 
 function randomNextIndex() {
@@ -543,6 +671,7 @@ function randomNextIndex() {
 
 function nextTrack(shouldPlay = true) {
   if (!tracks.length) return;
+  swingTonearm();
 
   if (historyCursor < playHistory.length - 1) {
     historyCursor += 1;
@@ -559,6 +688,7 @@ function nextTrack(shouldPlay = true) {
 
 function previousSong(shouldPlay = true) {
   if (!tracks.length) return;
+  swingTonearm();
 
   if (historyCursor > 0) {
     historyCursor -= 1;
@@ -575,6 +705,7 @@ function previousSong(shouldPlay = true) {
 
 function previousTrack() {
   if (!tracks.length) return;
+  swingTonearm();
   if (audio.currentTime > 3) {
     audio.currentTime = 0;
     savePlaybackState();
@@ -760,6 +891,8 @@ touchProgress.addEventListener("keydown", (event) => {
   updateMediaSessionPosition();
 });
 
+lyricsEl.addEventListener("scroll", selectLyricNearCenter, { passive: true });
+
 audio.addEventListener("loadedmetadata", () => {
   durationEl.textContent = formatTime(audio.duration);
 
@@ -792,6 +925,24 @@ audio.addEventListener("pause", () => {
 });
 audio.addEventListener("ended", () => nextTrack(true));
 trackArtwork.addEventListener("error", clearArtwork);
+tonearm.addEventListener("animationend", () => {
+  tonearm.classList.remove("is-swinging");
+});
+recordFrame.addEventListener("click", (event) => {
+  if (!mobileLayoutQuery.matches) return;
+  event.stopPropagation();
+  openMobileLyrics();
+});
+recordFrame.addEventListener("keydown", (event) => {
+  if (!mobileLayoutQuery.matches) return;
+  if (event.key !== "Enter" && event.key !== " ") return;
+  event.preventDefault();
+  openMobileLyrics();
+});
+playerPanel.addEventListener("click", () => {
+  if (!mobileLayoutQuery.matches || !playerPanel.classList.contains("mobile-lyrics-open")) return;
+  closeMobileLyrics();
+});
 openLibraryButton.addEventListener("click", openLibraryDrawer);
 closeLibraryButton.addEventListener("click", closeLibraryDrawer);
 collapseLibraryButton.addEventListener("click", () => setLibraryCollapsed(true));
@@ -840,6 +991,7 @@ desktopArtworkQuery.addEventListener("change", () => {
 
 mobileLayoutQuery.addEventListener("change", () => {
   closeLibraryDrawer();
+  closeMobileLyrics();
 });
 
 restoreLibraryCollapsed();
