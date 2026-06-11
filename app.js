@@ -81,17 +81,65 @@ function clampChannel(value) {
   return Math.min(255, Math.max(0, Math.round(value)));
 }
 
-function mixRgb(color, target, amount) {
-  const clampedAmount = Math.min(1, Math.max(0, amount));
-  return {
-    r: clampChannel(color.r + (target.r - color.r) * clampedAmount),
-    g: clampChannel(color.g + (target.g - color.g) * clampedAmount),
-    b: clampChannel(color.b + (target.b - color.b) * clampedAmount),
-  };
-}
-
 function rgbToCss(color) {
   return `rgb(${clampChannel(color.r)}, ${clampChannel(color.g)}, ${clampChannel(color.b)})`;
+}
+
+function rgbToHsl(color) {
+  const r = color.r / 255;
+  const g = color.g / 255;
+  const b = color.b / 255;
+  const max = Math.max(r, g, b);
+  const min = Math.min(r, g, b);
+  const lightness = (max + min) / 2;
+
+  if (max === min) {
+    return { h: 0, s: 0, l: lightness };
+  }
+
+  const delta = max - min;
+  const saturation = lightness > 0.5 ? delta / (2 - max - min) : delta / (max + min);
+  let hue = 0;
+
+  if (max === r) {
+    hue = (g - b) / delta + (g < b ? 6 : 0);
+  } else if (max === g) {
+    hue = (b - r) / delta + 2;
+  } else {
+    hue = (r - g) / delta + 4;
+  }
+
+  return { h: hue * 60, s: saturation, l: lightness };
+}
+
+function hslToRgb(hue, saturation, lightness) {
+  const h = (((hue % 360) + 360) % 360) / 360;
+  const s = Math.min(1, Math.max(0, saturation));
+  const l = Math.min(1, Math.max(0, lightness));
+
+  if (s === 0) {
+    const value = clampChannel(l * 255);
+    return { r: value, g: value, b: value };
+  }
+
+  const hueToRgb = (p, q, t) => {
+    let adjusted = t;
+    if (adjusted < 0) adjusted += 1;
+    if (adjusted > 1) adjusted -= 1;
+    if (adjusted < 1 / 6) return p + (q - p) * 6 * adjusted;
+    if (adjusted < 1 / 2) return q;
+    if (adjusted < 2 / 3) return p + (q - p) * (2 / 3 - adjusted) * 6;
+    return p;
+  };
+
+  const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+  const p = 2 * l - q;
+
+  return {
+    r: clampChannel(hueToRgb(p, q, h + 1 / 3) * 255),
+    g: clampChannel(hueToRgb(p, q, h) * 255),
+    b: clampChannel(hueToRgb(p, q, h - 1 / 3) * 255),
+  };
 }
 
 function applyTheme(theme = DEFAULT_THEME) {
@@ -137,12 +185,11 @@ function extractArtworkPalette(image) {
     averageB += b;
     averageCount += 1;
 
-    const max = Math.max(r, g, b);
-    const min = Math.min(r, g, b);
-    const lightness = (max + min) / 510;
-    const saturation = max === 0 ? 0 : (max - min) / max;
+    const hsl = rgbToHsl({ r, g, b });
+    const lightness = hsl.l;
+    const saturation = hsl.s;
 
-    if (lightness < 0.08 || lightness > 0.92) continue;
+    if (lightness < 0.08 || lightness > 0.94 || saturation < 0.08) continue;
 
     const bucketKey = [r, g, b].map((value) => Math.round(value / 24) * 24).join(",");
     const bucket = buckets.get(bucketKey) || { r: 0, g: 0, b: 0, count: 0, score: 0 };
@@ -150,7 +197,7 @@ function extractArtworkPalette(image) {
     bucket.g += g;
     bucket.b += b;
     bucket.count += 1;
-    bucket.score += 1 + saturation * 2 + (0.5 - Math.abs(lightness - 0.5)) * 0.6;
+    bucket.score += 0.18 + saturation * 3.4 + (0.5 - Math.abs(lightness - 0.46)) * 0.85;
     buckets.set(bucketKey, bucket);
   }
 
@@ -191,12 +238,20 @@ function updateThemeFromArtwork(image) {
       return;
     }
 
-    const top = mixRgb(dominant, { r: 255, g: 255, b: 255 }, 0.68);
-    const mid = mixRgb(dominant, { r: 34, g: 40, b: 37 }, 0.26);
-    const bottom = mixRgb(dominant, { r: 0, g: 0, b: 0 }, 0.58);
-    const accent = mixRgb(dominant, { r: 255, g: 255, b: 255 }, 0.16);
-    const accentSoft = mixRgb(dominant, { r: 255, g: 255, b: 255 }, 0.82);
-    const accentStrong = mixRgb(dominant, { r: 0, g: 0, b: 0 }, 0.32);
+    const dominantHsl = rgbToHsl(dominant);
+    if (dominantHsl.s < 0.08) {
+      resetTheme();
+      return;
+    }
+
+    const hue = dominantHsl.h;
+    const saturation = Math.min(0.84, Math.max(0.46, dominantHsl.s * 1.06));
+    const top = hslToRgb(hue, saturation, 0.4);
+    const mid = hslToRgb(hue, Math.min(0.78, saturation * 0.96), 0.22);
+    const bottom = hslToRgb(hue + 4, Math.min(0.72, saturation * 0.9), 0.11);
+    const accent = hslToRgb(hue, Math.min(0.82, saturation * 1.02), 0.62);
+    const accentSoft = hslToRgb(hue, Math.min(0.52, saturation * 0.42), 0.88);
+    const accentStrong = hslToRgb(hue, Math.min(0.82, saturation), 0.3);
 
     applyTheme({
       pageBgTop: rgbToCss(top),
@@ -964,26 +1019,30 @@ function buildTracksFromFiles(files) {
     });
 }
 
-async function loadServerLibrary() {
+function normalizeRemoteTrack(track) {
+  return {
+    artist: track.artist || "Unknown Artist",
+    title: track.title || track.name || "Unknown Title",
+    name: track.name || track.audioUrl || track.title || "Unknown Track",
+    searchText: track.searchText || [track.artist, track.title, track.name].filter(Boolean).join(" "),
+    audioUrl: track.audioUrl,
+    lyricUrl: track.lyricUrl || null,
+    imageUrl: track.imageUrl || null,
+    extension: track.extension || getExtension(track.name || track.audioUrl || "mp3"),
+    playable: track.playable !== false,
+    objectUrl: null,
+  };
+}
+
+async function loadRemoteLibrary(libraryUrl, sourceLabel) {
   try {
-    const response = await fetch("/api/tracks");
+    const response = await fetch(libraryUrl);
     if (!response.ok) return false;
 
     const payload = await response.json();
     if (!Array.isArray(payload.tracks) || !payload.tracks.length) return false;
 
-    tracks = payload.tracks.map((track) => ({
-      artist: track.artist,
-      title: track.title,
-      name: track.name,
-      searchText: track.searchText,
-      audioUrl: track.audioUrl,
-      lyricUrl: track.lyricUrl,
-      imageUrl: track.imageUrl,
-      extension: track.extension,
-      playable: track.playable,
-      objectUrl: null,
-    }));
+    tracks = payload.tracks.map(normalizeRemoteTrack);
     currentIndex = -1;
     playHistory = [];
     historyCursor = -1;
@@ -1003,11 +1062,15 @@ async function loadServerLibrary() {
     const unsupportedCount = tracks.filter((track) => track.playable === false).length;
     trackCountEl.textContent = unsupportedCount
       ? `${tracks.length} songs loaded, ${unsupportedCount} unsupported`
-      : `${tracks.length} songs loaded from Converted Music`;
+      : `${tracks.length} songs loaded from ${sourceLabel}`;
     return true;
   } catch {
     return false;
   }
+}
+
+async function loadServerLibrary() {
+  return (await loadRemoteLibrary("/api/tracks", "Converted Music")) || loadRemoteLibrary("./tracks.json", "tracks.json");
 }
 
 folderInput.addEventListener("change", async (event) => {

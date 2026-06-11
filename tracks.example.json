@@ -1,0 +1,15 @@
+{
+  "tracks": [
+    {
+      "artist": "Example Artist",
+      "title": "Example Song",
+      "name": "Example Artist - Example Song.mp3",
+      "extension": "mp3",
+      "playable": true,
+      "audioUrl": "./music/Example%20Artist%20-%20Example%20Song.mp3",
+      "lyricUrl": "./music/Example%20Artist%20-%20Example%20Song.lrc",
+      "imageUrl": "./music/Example%20Artist%20-%20Example%20Song.jpg",
+      "searchText": "Example Artist Example Song Example Artist - Example Song.mp3"
+    }
+  ]
+}

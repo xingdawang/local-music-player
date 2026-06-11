@@ -336,7 +336,7 @@ def search_itunes_artwork(query: str) -> str | None:
     artwork_url = results[0].get("artworkUrl100")
     if not isinstance(artwork_url, str) or not artwork_url:
         return None
-    return artwork_url.replace("100x100bb", "600x600bb")
+    return artwork_url.replace("100x100bb", "1200x1200bb")
 
 
 if __name__ == "__main__":

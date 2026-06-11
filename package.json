@@ -1,0 +1,11 @@
+{
+  "name": "local-music-player",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build:static": "node scripts/build-static-site.mjs",
+    "generate:tracks": "node scripts/generate-tracks-json.mjs",
+    "check": "node --check app.js"
+  }
+}
