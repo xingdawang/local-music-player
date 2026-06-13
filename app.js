@@ -75,6 +75,7 @@ let isSeeking = false;
 let playMode = "loop";
 let playHistory = [];
 let historyCursor = -1;
+let shuffleBag = [];
 let currentArtworkObjectUrl = null;
 let pendingSeekTime = null;
 let lastStateSaveAt = 0;
@@ -95,6 +96,8 @@ let lastAmbientTransportInteractionAt = 0;
 let lastAmbientHotzoneActivationAt = 0;
 let lastAmbientTouchControlActivationAt = 0;
 let ambientHideSuppressedUntil = 0;
+let ambientDoubleTapStart = null;
+let lastAmbientDoubleTap = null;
 const isTouchDebugEnabled = localStorage.getItem(TOUCH_DEBUG_KEY) === "true";
 const touchDebugSessionId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 
@@ -108,6 +111,9 @@ const AMBIENT_HOTZONE_ACTIVATION_GRACE_MS = 700;
 const AMBIENT_TOUCH_CONTROL_CLICK_SUPPRESSION_MS = 900;
 const AMBIENT_TOUCH_CONTROL_AUTO_HIDE_MS = 3600;
 const AMBIENT_REVEAL_HIDE_SUPPRESSION_MS = 1400;
+const AMBIENT_DOUBLE_TAP_MAX_INTERVAL_MS = 360;
+const AMBIENT_DOUBLE_TAP_MAX_DISTANCE = 44;
+const AMBIENT_DOUBLE_TAP_MAX_DRIFT = 18;
 const KEYBOARD_SEEK_SECONDS = 5;
 
 const DEFAULT_THEME = {
@@ -330,6 +336,10 @@ function isMobileOrTabletDevice() {
   const platform = navigator.platform || "";
   const isIpadOSDesktopMode = platform === "MacIntel" && navigator.maxTouchPoints > 1;
   return /Android|iPad|iPhone|iPod|Kindle|Mobile|PlayBook|Silk|Tablet/i.test(userAgent) || isIpadOSDesktopMode;
+}
+
+function isTabletAmbientPlaybackSurface() {
+  return isAmbientMode && isTouchCapableDevice() && isMobileOrTabletDevice() && !phoneControlsHiddenQuery.matches;
 }
 
 function isTouchLikePointerEvent(event) {
@@ -733,6 +743,75 @@ function handleAmbientTouchActivation(event) {
   hideAmbientControls();
 }
 
+function shouldHandleAmbientDoubleTapPlayback(event) {
+  if (!isTabletAmbientPlaybackSurface()) return false;
+  if (!isTouchLikePointerEvent(event) || isDesktopMouseEvent(event)) return false;
+  if (shouldIgnoreAmbientTapTarget(event)) return false;
+  return true;
+}
+
+function handleAmbientDoubleTapPointerDown(event) {
+  if (!shouldHandleAmbientDoubleTapPlayback(event)) {
+    ambientDoubleTapStart = null;
+    return;
+  }
+
+  ambientDoubleTapStart = {
+    pointerId: event.pointerId,
+    time: Date.now(),
+    x: event.clientX,
+    y: event.clientY,
+  };
+}
+
+function handleAmbientDoubleTapPointerUp(event) {
+  if (!ambientDoubleTapStart || ambientDoubleTapStart.pointerId !== event.pointerId) return;
+
+  const tapStart = ambientDoubleTapStart;
+  ambientDoubleTapStart = null;
+
+  if (!shouldHandleAmbientDoubleTapPlayback(event) || didMobileSwipe) {
+    lastAmbientDoubleTap = null;
+    postTouchDebug("ambient-double-tap-ignored-surface", event);
+    return;
+  }
+
+  const drift = Math.hypot(event.clientX - tapStart.x, event.clientY - tapStart.y);
+  if (drift > AMBIENT_DOUBLE_TAP_MAX_DRIFT) {
+    lastAmbientDoubleTap = null;
+    postTouchDebug("ambient-double-tap-ignored-drift", event, { drift: Math.round(drift) });
+    return;
+  }
+
+  const now = Date.now();
+  const previousTap = lastAmbientDoubleTap;
+  lastAmbientDoubleTap = {
+    time: now,
+    x: event.clientX,
+    y: event.clientY,
+  };
+
+  if (!previousTap) {
+    postTouchDebug("ambient-double-tap-first", event);
+    return;
+  }
+
+  const interval = now - previousTap.time;
+  const distance = Math.hypot(event.clientX - previousTap.x, event.clientY - previousTap.y);
+  if (interval > AMBIENT_DOUBLE_TAP_MAX_INTERVAL_MS || distance > AMBIENT_DOUBLE_TAP_MAX_DISTANCE) {
+    postTouchDebug("ambient-double-tap-new-first", event, { interval, distance: Math.round(distance) });
+    return;
+  }
+
+  lastAmbientDoubleTap = null;
+  if (typeof event.preventDefault === "function" && event.cancelable) {
+    event.preventDefault();
+  }
+  event.stopPropagation();
+  postTouchDebug("ambient-double-tap-toggle-playback", event);
+  togglePlayback();
+}
+
 function suppressLibraryDrawer(isSuppressed) {
   libraryPanel.hidden = isSuppressed;
   libraryScrim.hidden = isSuppressed;
@@ -930,10 +1009,11 @@ function finishMobileSwipe(event) {
   event.stopPropagation();
 
   if (tracks.length) {
+    const shouldPlay = shouldPlayAfterManualTrackChange();
     if (deltaX < 0) {
-      nextTrack(true, { silentNotAllowed: true });
+      nextTrack(shouldPlay, { silentNotAllowed: true });
     } else {
-      previousSong(true, { silentNotAllowed: true });
+      previousSong(shouldPlay, { silentNotAllowed: true });
     }
   }
 }
@@ -1208,8 +1288,8 @@ function setupMediaSession() {
     swingTonearm();
     audio.pause();
   });
-  setMediaSessionAction("previoustrack", () => previousSong(true));
-  setMediaSessionAction("nexttrack", () => nextTrack(true));
+  setMediaSessionAction("previoustrack", previousTrack);
+  setMediaSessionAction("nexttrack", () => nextTrack(shouldPlayAfterManualTrackChange()));
   setMediaSessionAction("seekto", (details) => {
     if (!Number.isFinite(details.seekTime)) return;
     audio.currentTime = details.seekTime;
@@ -1284,6 +1364,9 @@ function handleDesktopArrowShortcut(event) {
 
 function togglePlayMode() {
   playMode = playMode === "shuffle" ? "loop" : "shuffle";
+  if (playMode === "shuffle") {
+    resetShuffleBag();
+  }
   savePlaybackState();
   updateButtons();
 }
@@ -1375,6 +1458,18 @@ function parseLrc(text) {
   return parsed.sort((a, b) => a.time - b.time);
 }
 
+function parsePlainLyrics(text) {
+  return text
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => ({ time: null, text: line }));
+}
+
+function hasSyncedLyrics() {
+  return lyrics.some((lyric) => Number.isFinite(lyric.time));
+}
+
 function renderPlaylist() {
   playlistEl.innerHTML = "";
 
@@ -1463,48 +1558,71 @@ function toggleLibraryPanel() {
   setLibraryCollapsed(!appShell.classList.contains("library-collapsed"));
 }
 
-function renderLyrics() {
+function renderLyrics(emptyMessage = "No lyric file found for this song.") {
   lyricsEl.innerHTML = "";
+  lyricsEl.classList.toggle("is-empty", !lyrics.length);
   activeLyricIndex = -1;
   clearLyricSelection();
 
   if (!lyrics.length) {
     const line = document.createElement("p");
-    line.className = "lyric-line active";
-    line.textContent = "No lyric file found for this song.";
+    line.className = "lyric-empty";
+    line.textContent = emptyMessage;
     lyricsEl.appendChild(line);
     return;
   }
 
+  const synced = hasSyncedLyrics();
   lyrics.forEach((lyric, index) => {
     const line = document.createElement("div");
-    line.className = `lyric-line${index === 0 ? " active" : ""}`;
+    line.className = `lyric-line${synced && index === 0 ? " active" : ""}`;
     line.dataset.index = index;
-    line.innerHTML = `
-      <span class="lyric-time">${formatLyricTime(lyric.time)}</span>
-      <span class="lyric-text">${lyric.text}</span>
-      <button class="lyric-seek-button" type="button" aria-label="Play from ${formatLyricTime(lyric.time)}">
-        <span aria-hidden="true"></span>
-      </button>
-    `;
-    line.querySelector(".lyric-seek-button").addEventListener("click", (event) => {
-      event.stopPropagation();
-      clearLyricSelection();
-      audio.currentTime = lyric.time;
-      currentTimeEl.textContent = formatTime(audio.currentTime);
-      updateProgressUi();
-      updateActiveLyric();
-      updateMediaSessionPosition();
-      savePlaybackState();
-      startPlayback();
-    });
+
+    if (Number.isFinite(lyric.time)) {
+      const time = document.createElement("span");
+      time.className = "lyric-time";
+      time.textContent = formatLyricTime(lyric.time);
+      line.appendChild(time);
+    }
+
+    const text = document.createElement("span");
+    text.className = "lyric-text";
+    text.textContent = lyric.text;
+    line.appendChild(text);
+
+    if (Number.isFinite(lyric.time)) {
+      const seekButton = document.createElement("button");
+      seekButton.className = "lyric-seek-button";
+      seekButton.type = "button";
+      seekButton.setAttribute("aria-label", `Play from ${formatLyricTime(lyric.time)}`);
+      seekButton.innerHTML = `<span aria-hidden="true"></span>`;
+      seekButton.addEventListener("click", (event) => {
+        event.stopPropagation();
+        clearLyricSelection();
+        audio.currentTime = lyric.time;
+        currentTimeEl.textContent = formatTime(audio.currentTime);
+        updateProgressUi();
+        updateActiveLyric();
+        updateMediaSessionPosition();
+        savePlaybackState();
+        startPlayback();
+      });
+      line.appendChild(seekButton);
+    }
+
     lyricsEl.appendChild(line);
   });
 
-  activeLyricIndex = 0;
+  activeLyricIndex = synced ? 0 : -1;
 }
 
 async function loadLyrics(track) {
+  lyrics = [];
+  lyricsEl.innerHTML = "";
+  lyricsEl.classList.add("is-empty");
+  activeLyricIndex = -1;
+  clearLyricSelection();
+
   if (track.lyricUrl) {
     const response = await fetch(track.lyricUrl);
     const text = response.ok ? await response.text() : "";
@@ -1514,28 +1632,32 @@ async function loadLyrics(track) {
       return;
     }
 
+    renderLyrics();
     if (await loadOnlineLyrics(track)) {
       renderLyrics();
       return;
     }
+    return;
   }
 
   if (!track.lyricFile) {
+    renderLyrics();
     if (await loadOnlineLyrics(track)) {
       renderLyrics();
       return;
     }
 
-    lyrics = [];
-    renderLyrics();
     return;
   }
 
   const text = await track.lyricFile.text();
   lyrics = parseLrc(text);
-  if (!lyrics.length && (await loadOnlineLyrics(track))) {
+  if (!lyrics.length) {
     renderLyrics();
-    return;
+    if (await loadOnlineLyrics(track)) {
+      renderLyrics();
+      return;
+    }
   }
 
   renderLyrics();
@@ -1610,14 +1732,20 @@ async function loadOnlineLyrics(track) {
   try {
     const response = await fetch(lookupUrl);
     const payload = response.ok ? await response.json() : null;
-    if (!payload?.lyricUrl) {
+    if (!payload?.lyricUrl && !payload?.plainLyrics) {
       track.lyricsLookupFailed = true;
       return false;
     }
 
-    const lyricResponse = await fetch(payload.lyricUrl);
-    const text = lyricResponse.ok ? await lyricResponse.text() : "";
-    const downloadedLyrics = parseLrc(text);
+    let downloadedLyrics = [];
+    if (payload.lyricUrl) {
+      const lyricResponse = await fetch(payload.lyricUrl);
+      const text = lyricResponse.ok ? await lyricResponse.text() : "";
+      downloadedLyrics = parseLrc(text);
+    }
+    if (!downloadedLyrics.length && payload.plainLyrics) {
+      downloadedLyrics = parsePlainLyrics(payload.plainLyrics);
+    }
     if (!downloadedLyrics.length) {
       track.lyricsLookupFailed = true;
       return false;
@@ -1739,7 +1867,7 @@ function updateButtons() {
 }
 
 function updateActiveLyric() {
-  if (!lyrics.length) return;
+  if (!lyrics.length || !hasSyncedLyrics()) return;
 
   const now = audio.currentTime;
   let nextIndex = lyrics.findIndex((line, index) => {
@@ -1760,16 +1888,32 @@ function updateActiveLyric() {
 }
 
 function randomNextIndex() {
-  const playableIndexes = tracks
-    .map((track, index) => (track.playable === false ? null : index))
-    .filter((index) => index !== null);
+  const playableIndexes = getPlayableIndexes();
   if (playableIndexes.length <= 1) return currentIndex;
 
-  let next = currentIndex;
-  while (next === currentIndex) {
-    next = playableIndexes[Math.floor(Math.random() * playableIndexes.length)];
+  shuffleBag = shuffleBag.filter((index) => tracks[index]?.playable !== false && index !== currentIndex);
+  if (!shuffleBag.length) {
+    resetShuffleBag();
   }
-  return next;
+  return shuffleBag.pop() ?? currentIndex;
+}
+
+function getPlayableIndexes() {
+  return tracks
+    .map((track, index) => (track.playable === false ? null : index))
+    .filter((index) => index !== null);
+}
+
+function resetShuffleBag() {
+  shuffleBag = getPlayableIndexes().filter((index) => index !== currentIndex);
+  for (let index = shuffleBag.length - 1; index > 0; index -= 1) {
+    const swapIndex = Math.floor(Math.random() * (index + 1));
+    [shuffleBag[index], shuffleBag[swapIndex]] = [shuffleBag[swapIndex], shuffleBag[index]];
+  }
+}
+
+function shouldPlayAfterManualTrackChange() {
+  return !audio.paused;
 }
 
 function nextTrack(shouldPlay = true, options = {}) {
@@ -1816,7 +1960,7 @@ function previousTrack() {
     return;
   }
 
-  previousSong(true);
+  previousSong(shouldPlayAfterManualTrackChange());
 }
 
 function buildTracksFromFiles(files) {
@@ -1877,6 +2021,7 @@ async function loadRemoteLibrary(libraryUrl, sourceLabel) {
     currentIndex = -1;
     playHistory = [];
     historyCursor = -1;
+    shuffleBag = [];
 
     const savedState = readPlaybackState();
     if (savedState?.playMode === "shuffle" || savedState?.playMode === "loop") {
@@ -1909,6 +2054,7 @@ folderInput.addEventListener("change", async (event) => {
   currentIndex = -1;
   playHistory = [];
   historyCursor = -1;
+  shuffleBag = [];
   audio.pause();
   audio.removeAttribute("src");
   clearArtwork();
@@ -1932,7 +2078,7 @@ searchInput.addEventListener("input", () => {
 
 bindTransportControl(playButton, togglePlayback);
 bindTransportControl(prevButton, previousTrack);
-bindTransportControl(nextButton, () => nextTrack(true));
+bindTransportControl(nextButton, () => nextTrack(shouldPlayAfterManualTrackChange()));
 bindTransportControl(playModeButton, togglePlayMode);
 
 ambientToggleButton.addEventListener("pointerdown", (event) => {
@@ -2031,6 +2177,8 @@ playerPanel.addEventListener("pointermove", handleAmbientPointerMove);
 playerPanel.addEventListener("pointerleave", handleAmbientPointerLeave);
 playerPanel.addEventListener("pointerdown", handleAmbientPanelRevealFallback, { capture: true });
 playerPanel.addEventListener("touchstart", handleAmbientPanelRevealFallback, { capture: true, passive: false });
+playerPanel.addEventListener("pointerdown", handleAmbientDoubleTapPointerDown);
+playerPanel.addEventListener("pointerup", handleAmbientDoubleTapPointerUp);
 ambientControlHotzone.addEventListener("pointerdown", handleAmbientHotzoneActivation);
 ambientControlHotzone.addEventListener("pointerup", handleAmbientHotzoneActivation);
 ambientControlHotzone.addEventListener("touchstart", handleAmbientHotzoneActivation, { passive: false });
@@ -2169,7 +2317,7 @@ document.addEventListener("keydown", (event) => {
     previousTrack();
   } else if (shortcut === "n") {
     event.preventDefault();
-    nextTrack(true);
+    nextTrack(shouldPlayAfterManualTrackChange());
   } else if (shortcut === "r") {
     togglePlayMode();
   }

@@ -518,17 +518,41 @@ button:hover {
 
 .deck-panel {
   display: grid;
-  grid-template-rows: minmax(0, 1fr) auto auto;
+  grid-template-rows: minmax(0, 1fr) minmax(6rem, 0.22fr) auto;
   justify-items: center;
   align-items: center;
+  padding-top: clamp(2.5rem, 7vh, 4.5rem);
   min-width: 0;
   min-height: 0;
+}
+
+.player-panel:not(.ambient-mode) .track-copy {
+  align-self: center;
+  margin-top: 0;
+  margin-bottom: 0;
+}
+
+.player-panel:not(.ambient-mode) .track-copy h2 {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  margin-bottom: 0.18rem;
+  font-size: clamp(1.35rem, 2.4vw, 2.05rem);
+}
+
+.player-panel:not(.ambient-mode) .track-copy p:last-child {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 1;
+  line-height: 1.25;
 }
 
 .record-frame {
   position: relative;
   --tonearm-rest-angle: -60deg;
-  --tonearm-play-angle: -34deg;
+  --tonearm-play-angle: -39deg;
   container-type: size;
   display: grid;
   place-items: center;
@@ -629,6 +653,12 @@ button:hover {
     inset -0.22rem 0 0 rgba(214, 214, 214, 0.92),
     0 0.45cqw 1cqw rgba(0, 0, 0, 0.18);
   transform: rotate(28deg);
+}
+
+@media (min-width: 1101px) {
+  .player-panel:not(.ambient-mode) .tonearm {
+    top: clamp(-3.8rem, -9.2cqw, -2.15rem);
+  }
 }
 
 .disc {
@@ -782,6 +812,12 @@ button:hover {
   -ms-overflow-style: none; /* Old Edge / IE */
 }
 
+.lyrics.is-empty {
+  display: grid;
+  place-items: center;
+  mask-image: none;
+}
+
 .lyrics::-webkit-scrollbar {
   display: none; /* Chrome / Safari / Edge */
 }
@@ -800,14 +836,26 @@ button:hover {
   font-size: clamp(1rem, 1.7vw, 1.28rem);
   line-height: 1.55;
   transition:
-    background-color 160ms ease,
-    color 160ms ease,
-    transform 160ms ease;
+    background-color 120ms ease,
+    color 120ms ease,
+    transform 170ms ease;
 }
 
 .lyric-line.active {
   color: #ffffff;
   font-weight: 800;
+}
+
+.lyric-empty {
+  width: min(100%, 26rem);
+  margin: 0 auto;
+  color: rgba(237, 242, 237, 0.72);
+  font-size: clamp(1rem, 1.7vw, 1.28rem);
+  line-height: 1.45;
+  text-align: center;
+  caret-color: transparent;
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 .lyric-line.selected {
@@ -822,10 +870,12 @@ button:hover {
   font-variant-numeric: tabular-nums;
   opacity: 0;
   transition: opacity 160ms ease;
+  transition-delay: 0ms;
 }
 
 .lyric-line.selected .lyric-time {
   opacity: 1;
+  transition-delay: 45ms;
 }
 
 .lyric-text {
@@ -843,11 +893,24 @@ button:hover {
   padding: 0;
   opacity: 0;
   pointer-events: none;
+  transform: scale(0.92);
+  transition:
+    background-color 140ms ease,
+    opacity 150ms ease,
+    transform 150ms ease;
+  transition-delay: 0ms;
 }
 
 .lyric-line.selected .lyric-seek-button {
   opacity: 1;
   pointer-events: auto;
+  transform: scale(1);
+  transition-delay: 65ms;
+}
+
+.lyric-line.selected .lyric-seek-button:hover,
+.lyric-line.selected .lyric-seek-button:focus-visible {
+  background: rgba(237, 242, 237, 0.1);
 }
 
 .lyric-seek-button span {
@@ -1520,17 +1583,18 @@ button:disabled {
     grid-template-rows: auto minmax(0, 1fr);
     gap: 0.65rem;
     overflow: hidden;
-    padding: 0.85rem 1rem calc(1rem + env(safe-area-inset-bottom));
+    padding: 0.35rem 1rem calc(2.25rem + env(safe-area-inset-bottom));
   }
 
   .deck-panel {
-    grid-template-rows: minmax(0, 1fr) auto auto;
+    grid-template-rows: minmax(0, 1fr) auto minmax(8.75rem, 0.48fr);
     align-content: stretch;
     height: 100%;
+    padding-top: 0;
   }
 
   .record-frame {
-    align-self: center;
+    align-self: end;
     width: min(76vw, 19.5rem);
     width: min(76vw, 19.5rem, calc(100svh - 19.25rem));
     width: min(76vw, 19.5rem, calc(100dvh - 19.25rem));
@@ -1538,8 +1602,19 @@ button:disabled {
     cursor: pointer;
   }
 
+  .player-panel:not(.ambient-mode) .record-frame {
+    margin-bottom: 1.85rem;
+  }
+
   .track-copy {
-    margin-top: 0.45rem;
+    margin-top: 1.25rem;
+    margin-bottom: 0.9rem;
+  }
+
+  .player-panel:not(.ambient-mode) .track-copy {
+    align-self: center;
+    margin-top: 1.25rem;
+    margin-bottom: 0.9rem;
   }
 
   .track-copy h2 {
@@ -1638,7 +1713,7 @@ button:disabled {
     width: min(100%, 22rem);
     align-self: end;
     padding-top: 0.95rem;
-    padding-bottom: calc(0.45rem + env(safe-area-inset-bottom));
+    padding-bottom: calc(1.25rem + env(safe-area-inset-bottom));
   }
 
   .progress {
@@ -1771,6 +1846,21 @@ button:disabled {
     font-size: clamp(1.35rem, 2.4vw, 2rem);
   }
 
+  .player-panel:not(.ambient-mode) .deck-panel {
+    grid-template-rows: minmax(0, 1fr) minmax(5.5rem, 0.2fr) auto;
+    padding-top: clamp(1.75rem, 4vh, 3rem);
+  }
+
+  .player-panel:not(.ambient-mode) .record-frame {
+    align-self: end;
+  }
+
+  .player-panel:not(.ambient-mode) .track-copy {
+    align-self: center;
+    margin-top: 0;
+    margin-bottom: 0;
+  }
+
   .lyrics {
     padding: clamp(1.25rem, 3vw, 2.5rem) clamp(0.75rem, 2.5vw, 2rem);
   }
@@ -1799,6 +1889,12 @@ button:disabled {
 
   .player-panel.ambient-mode .transport {
     padding: 0.9rem clamp(1.25rem, 4vw, 3rem) calc(1rem + env(safe-area-inset-bottom));
+  }
+}
+
+@media (min-width: 641px) {
+  .app-shell.touch-device .player-panel.ambient-mode .ambient-toggle {
+    top: max(0.25rem, calc(env(safe-area-inset-top) + 1.35rem));
   }
 }
 

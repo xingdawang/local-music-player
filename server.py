@@ -20,7 +20,7 @@ DEFAULT_MUSIC_DIR = Path("/Users/xingdawang/Music/Converted Music")
 AUDIO_EXTENSIONS = {".mp3", ".flac", ".wav", ".m4a", ".ogg", ".aac"}
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".avif"}
 ARTWORK_SEARCH_TIMEOUT = 8
-LYRICS_SEARCH_TIMEOUT = 8
+LYRICS_SEARCH_TIMEOUT = 15
 LYRICS_PROVIDER_URL = "https://lrclib.net/api/search"
 DEBUG_EVENTS_LIMIT = 600
 DEBUG_EVENTS: list[dict[str, object]] = []
@@ -136,7 +136,7 @@ class MusicPlayerHandler(SimpleHTTPRequestHandler):
             if audio_path.suffix.lower() not in AUDIO_EXTENSIONS:
                 continue
 
-            artist, title = parse_track_name(audio_path.stem)
+            artist, title, audio_metadata = track_identity(audio_path)
             lyric_path = lrc_by_stem.get(audio_path.stem)
             image_path = image_by_stem.get(audio_path.stem)
             content_type = guess_music_type(audio_path)
@@ -151,6 +151,9 @@ class MusicPlayerHandler(SimpleHTTPRequestHandler):
                 {
                     "artist": artist,
                     "title": title,
+                    "album": audio_metadata.get("album"),
+                    "date": audio_metadata.get("date"),
+                    "genre": audio_metadata.get("genre"),
                     "name": audio_path.name,
                     "extension": audio_path.suffix.lower().removeprefix("."),
                     "playable": playable,
@@ -272,8 +275,12 @@ class MusicPlayerHandler(SimpleHTTPRequestHandler):
             self.send_error(404, "File not found")
             return
 
-        lyric_path, source = find_lyrics_for_audio(requested)
+        lyric_path, source = find_local_or_synced_lyrics_for_audio(requested)
         if not lyric_path:
+            online_lyrics = find_online_lyrics_for_audio(requested)
+            if online_lyrics:
+                self.send_json({"ok": True, **online_lyrics})
+                return
             self.send_json({"ok": False, "error": "Lyrics not found"}, status=404)
             return
 
@@ -292,6 +299,49 @@ def parse_track_name(stem: str) -> tuple[str, str]:
     if len(parts) == 2:
         return parts[0], parts[1]
     return "Unknown Artist", stem
+
+
+def track_identity(path: Path) -> tuple[str, str, dict[str, str]]:
+    parsed_artist, parsed_title = parse_track_name(path.stem)
+    audio_metadata = read_audio_metadata(path)
+    artist = audio_metadata.get("artist") or parsed_artist
+    title = audio_metadata.get("title") or parsed_title
+    return artist, title, audio_metadata
+
+
+def first_metadata_value(values: object) -> str | None:
+    if isinstance(values, list):
+        values = values[0] if values else None
+    if values is None:
+        return None
+
+    value = str(values).strip()
+    return value or None
+
+
+def read_audio_metadata(path: Path) -> dict[str, str]:
+    try:
+        audio = MutagenFile(path, easy=True)
+    except Exception:
+        return {}
+    if not audio:
+        return {}
+
+    metadata = {}
+    for source_key, target_key in (
+        ("artist", "artist"),
+        ("albumartist", "artist"),
+        ("title", "title"),
+        ("album", "album"),
+        ("date", "date"),
+        ("genre", "genre"),
+    ):
+        if target_key in metadata:
+            continue
+        value = first_metadata_value(audio.get(source_key))
+        if value:
+            metadata[target_key] = value
+    return metadata
 
 
 def quote_path(name: str) -> str:
@@ -393,7 +443,7 @@ def parse_lrc_timestamped_line(line: str) -> bool:
     return False
 
 
-def find_lyrics_for_audio(audio_path: Path) -> tuple[Path, str] | tuple[None, None]:
+def find_local_or_synced_lyrics_for_audio(audio_path: Path) -> tuple[Path, str] | tuple[None, None]:
     local_path = local_lyric_path(audio_path)
     if local_path and is_valid_lrc_file(local_path):
         return local_path, "local"
@@ -405,13 +455,35 @@ def find_lyrics_for_audio(audio_path: Path) -> tuple[Path, str] | tuple[None, No
     return None, None
 
 
+def find_online_lyrics_for_audio(audio_path: Path) -> dict[str, str] | None:
+    artist, title, _ = track_identity(audio_path)
+    candidates = search_lrclib_lyrics(artist, title, audio_duration_seconds(audio_path))
+    synced_lyrics = select_synced_lyrics(candidates, artist, title)
+    if synced_lyrics:
+        downloaded_path = save_synced_lyrics(audio_path, synced_lyrics)
+        if downloaded_path:
+            return {
+                "source": "lrclib",
+                "lyricFile": downloaded_path.name,
+                "lyricUrl": f"/api/media?file={quote_path(downloaded_path.name)}",
+            }
+
+    plain_lyrics = select_plain_lyrics(candidates, artist, title)
+    if plain_lyrics:
+        return {"source": "lrclib-plain", "plainLyrics": plain_lyrics}
+    return None
+
+
 def download_online_lyrics(audio_path: Path) -> Path | None:
-    artist, title = parse_track_name(audio_path.stem)
+    artist, title, _ = track_identity(audio_path)
     candidates = search_lrclib_lyrics(artist, title, audio_duration_seconds(audio_path))
     lyrics_text = select_synced_lyrics(candidates, artist, title)
     if not lyrics_text:
         return None
+    return save_synced_lyrics(audio_path, lyrics_text)
 
+
+def save_synced_lyrics(audio_path: Path, lyrics_text: str) -> Path | None:
     target_path = audio_path.with_suffix(".lrc")
     if target_path.exists() and is_valid_lrc_file(target_path):
         return target_path
@@ -486,6 +558,15 @@ def select_synced_lyrics(candidates: list[dict[str, object]], artist: str, title
     return None
 
 
+def select_plain_lyrics(candidates: list[dict[str, object]], artist: str, title: str) -> str | None:
+    ranked = sorted(candidates, key=lambda item: lyric_candidate_score(item, artist, title), reverse=True)
+    for candidate in ranked:
+        lyrics_text = candidate.get("plainLyrics")
+        if isinstance(lyrics_text, str) and lyrics_text.strip():
+            return lyrics_text.strip()
+    return None
+
+
 def lyric_candidate_score(candidate: dict[str, object], artist: str, title: str) -> int:
     score = 0
     candidate_title = normalize_match_text(str(candidate.get("trackName", "")))
@@ -550,7 +631,7 @@ def find_artwork_for_audio(audio_path: Path) -> tuple[str, bytes] | None:
 
 
 def download_online_artwork(audio_path: Path) -> Path | None:
-    artist, title = parse_track_name(audio_path.stem)
+    artist, title, _ = track_identity(audio_path)
     query = f"{artist} {title}".strip()
     if not query or artist == "Unknown Artist":
         query = audio_path.stem
