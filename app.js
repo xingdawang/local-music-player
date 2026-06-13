@@ -9,8 +9,10 @@ const trackArtist = document.querySelector("#trackArtist");
 const lyricsStage = document.querySelector("#lyricsStage");
 const lyricsEl = document.querySelector("#lyrics");
 const trackArtwork = document.querySelector("#trackArtwork");
+const ambientArtwork = document.querySelector("#ambientArtwork");
 const recordFrame = document.querySelector(".record-frame");
 const tonearm = document.querySelector(".tonearm");
+const ambientBackdropImage = document.querySelector(".ambient-backdrop-image");
 const currentTimeEl = document.querySelector("#currentTime");
 const durationEl = document.querySelector("#duration");
 const progress = document.querySelector("#progress");
@@ -21,8 +23,14 @@ const prevButton = document.querySelector("#prevButton");
 const playButton = document.querySelector("#playButton");
 const nextButton = document.querySelector("#nextButton");
 const playModeButton = document.querySelector("#playModeButton");
+const ambientToggleButton = document.querySelector("#ambientToggleButton");
+const fullscreenToggleButton = document.querySelector("#fullscreenToggleButton");
+const ambientControlHotzone = document.querySelector(".ambient-control-hotzone");
+const transport = document.querySelector(".transport");
+const deckPanel = document.querySelector(".deck-panel");
 const playerPanel = document.querySelector(".player-panel");
 const appShell = document.querySelector(".app-shell");
+const libraryPanel = document.querySelector(".library-panel");
 const openLibraryButton = document.querySelector("#openLibraryButton");
 const closeLibraryButton = document.querySelector("#closeLibraryButton");
 const collapseLibraryButton = document.querySelector("#collapseLibraryButton");
@@ -41,8 +49,23 @@ const AUDIO_MIME_BY_EXTENSION = {
 };
 const desktopArtworkQuery = window.matchMedia("(min-width: 821px)");
 const mobileLayoutQuery = window.matchMedia("(max-width: 820px)");
+const touchLayoutQuery = window.matchMedia("(max-width: 1100px)");
+const desktopInputQuery = window.matchMedia("(hover: hover) and (pointer: fine)");
+const touchInputQuery = window.matchMedia("(pointer: coarse), (any-pointer: coarse), (hover: none)");
+const touchGestureQuery = window.matchMedia("(max-width: 1100px), (pointer: coarse), (any-pointer: coarse), (hover: none)");
+const phoneControlsHiddenQuery = window.matchMedia("(max-width: 640px)");
 const PLAYBACK_STATE_KEY = "localMusicPlayer.playbackState";
 const LIBRARY_COLLAPSED_KEY = "localMusicPlayer.libraryCollapsed";
+const AMBIENT_MODE_KEY = "localMusicPlayer.ambientMode";
+const TOUCH_DEBUG_KEY = "localMusicPlayer.touchDebug";
+const DEFAULT_ARTWORK_URL = "./favicon.png";
+const touchDebugParams = new URLSearchParams(window.location.search);
+
+if (touchDebugParams.has("debugTouch")) {
+  localStorage.setItem(TOUCH_DEBUG_KEY, "true");
+} else if (touchDebugParams.has("debugTouchOff")) {
+  localStorage.removeItem(TOUCH_DEBUG_KEY);
+}
 
 let tracks = [];
 let currentIndex = -1;
@@ -62,10 +85,30 @@ let lyricSelectionTimer = null;
 let isProgrammaticLyricScroll = false;
 let mobileSwipeStart = null;
 let didMobileSwipe = false;
+let isAmbientMode = false;
+let shouldRestoreAmbientMode = localStorage.getItem(AMBIENT_MODE_KEY) === "true";
+let hasAmbientArtwork = false;
+let isUsingFallbackArtwork = false;
+let ambientControlsTimer = null;
+let ambientControlsGeneration = 0;
+let lastAmbientTransportInteractionAt = 0;
+let lastAmbientHotzoneActivationAt = 0;
+let lastAmbientTouchControlActivationAt = 0;
+let ambientHideSuppressedUntil = 0;
+const isTouchDebugEnabled = localStorage.getItem(TOUCH_DEBUG_KEY) === "true";
+const touchDebugSessionId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 
 const MOBILE_SWIPE_MIN_DISTANCE = 64;
 const MOBILE_SWIPE_MAX_VERTICAL_DRIFT = 70;
 const MOBILE_SWIPE_DOMINANCE_RATIO = 1.35;
+const AMBIENT_DESKTOP_REVEAL_DISTANCE = 150;
+const AMBIENT_TOUCH_REVEAL_DISTANCE = 260;
+const AMBIENT_TRANSPORT_INTERACTION_GRACE_MS = 700;
+const AMBIENT_HOTZONE_ACTIVATION_GRACE_MS = 700;
+const AMBIENT_TOUCH_CONTROL_CLICK_SUPPRESSION_MS = 900;
+const AMBIENT_TOUCH_CONTROL_AUTO_HIDE_MS = 3600;
+const AMBIENT_REVEAL_HIDE_SUPPRESSION_MS = 1400;
+const KEYBOARD_SEEK_SECONDS = 5;
 
 const DEFAULT_THEME = {
   pageBgTop: "#5f756a",
@@ -74,6 +117,9 @@ const DEFAULT_THEME = {
   accent: "#8ecab5",
   accentSoft: "#dff4ec",
   accentStrong: "#356f5b",
+  ambientGradientStart: "#7e8f66",
+  ambientGradientMid: "#35462f",
+  ambientGradientEnd: "#101711",
 };
 
 
@@ -150,6 +196,9 @@ function applyTheme(theme = DEFAULT_THEME) {
   root.style.setProperty("--accent", theme.accent);
   root.style.setProperty("--accent-soft", theme.accentSoft);
   root.style.setProperty("--accent-strong", theme.accentStrong);
+  root.style.setProperty("--ambient-gradient-start", theme.ambientGradientStart || theme.pageBgTop);
+  root.style.setProperty("--ambient-gradient-mid", theme.ambientGradientMid || theme.pageBgMid);
+  root.style.setProperty("--ambient-gradient-end", theme.ambientGradientEnd || theme.pageBgBottom);
 }
 
 function resetTheme() {
@@ -252,6 +301,9 @@ function updateThemeFromArtwork(image) {
     const accent = hslToRgb(hue, Math.min(0.82, saturation * 1.02), 0.62);
     const accentSoft = hslToRgb(hue, Math.min(0.52, saturation * 0.42), 0.88);
     const accentStrong = hslToRgb(hue, Math.min(0.82, saturation), 0.3);
+    const ambientGradientStart = hslToRgb(hue - 8, Math.min(0.72, saturation * 0.72), 0.5);
+    const ambientGradientMid = hslToRgb(hue + 4, Math.min(0.78, saturation * 0.92), 0.28);
+    const ambientGradientEnd = hslToRgb(hue + 16, Math.min(0.7, saturation * 0.88), 0.1);
 
     applyTheme({
       pageBgTop: rgbToCss(top),
@@ -260,9 +312,525 @@ function updateThemeFromArtwork(image) {
       accent: rgbToCss(accent),
       accentSoft: rgbToCss(accentSoft),
       accentStrong: rgbToCss(accentStrong),
+      ambientGradientStart: rgbToCss(ambientGradientStart),
+      ambientGradientMid: rgbToCss(ambientGradientMid),
+      ambientGradientEnd: rgbToCss(ambientGradientEnd),
     });
   } catch {
     resetTheme();
+  }
+}
+
+function isTouchCapableDevice() {
+  return navigator.maxTouchPoints > 0 || touchInputQuery.matches;
+}
+
+function isTouchLikePointerEvent(event) {
+  return (
+    event.pointerType === "touch" ||
+    event.pointerType === "pen" ||
+    isTouchCapableDevice() ||
+    (touchGestureQuery.matches && !desktopInputQuery.matches)
+  );
+}
+
+function isDesktopMouseEvent(event) {
+  return event.pointerType === "mouse" && desktopInputQuery.matches && !isTouchCapableDevice();
+}
+
+function updateInputModeClasses() {
+  appShell.classList.toggle("touch-device", isTouchCapableDevice());
+}
+
+function debugElementLabel(node) {
+  if (!(node instanceof HTMLElement)) return String(node?.nodeName || node);
+  const id = node.id ? `#${node.id}` : "";
+  const classes = node.className && typeof node.className === "string" ? `.${node.className.trim().split(/\s+/).join(".")}` : "";
+  return `${node.tagName.toLowerCase()}${id}${classes}`;
+}
+
+function debugRect(element) {
+  if (!element) return null;
+  const rect = element.getBoundingClientRect();
+  return {
+    bottom: Math.round(rect.bottom),
+    height: Math.round(rect.height),
+    left: Math.round(rect.left),
+    right: Math.round(rect.right),
+    top: Math.round(rect.top),
+    width: Math.round(rect.width),
+  };
+}
+
+function debugEventPoint(event) {
+  const touch = event?.changedTouches?.[0] || event?.touches?.[0];
+  const clientX = Number.isFinite(event?.clientX) ? event.clientX : touch?.clientX;
+  const clientY = Number.isFinite(event?.clientY) ? event.clientY : touch?.clientY;
+  return {
+    x: Number.isFinite(clientX) ? Math.round(clientX) : null,
+    y: Number.isFinite(clientY) ? Math.round(clientY) : null,
+  };
+}
+
+function postTouchDebug(label, event = null, extra = {}) {
+  if (!isTouchDebugEnabled) return;
+
+  const point = debugEventPoint(event);
+  const panelRect = playerPanel.getBoundingClientRect();
+  const transportStyle = getComputedStyle(transport);
+  const hotzoneStyle = getComputedStyle(ambientControlHotzone);
+  const path =
+    typeof event?.composedPath === "function"
+      ? event.composedPath().slice(0, 8).map(debugElementLabel)
+      : [];
+  const payload = {
+    label,
+    session: touchDebugSessionId,
+    time: Date.now(),
+    type: event?.type || null,
+    pointerType: event?.pointerType || null,
+    cancelable: Boolean(event?.cancelable),
+    defaultPrevented: Boolean(event?.defaultPrevented),
+    target: debugElementLabel(event?.target),
+    currentTarget: debugElementLabel(event?.currentTarget),
+    path,
+    point,
+    distanceFromBottom: Number.isFinite(point.y) ? Math.round(panelRect.bottom - point.y) : null,
+    ambient: isAmbientMode,
+    controlsVisible: playerPanel.classList.contains("ambient-controls-visible"),
+    hideSuppressedFor: Math.max(0, Math.round(ambientHideSuppressedUntil - Date.now())),
+    sinceHotzone: Math.round(Date.now() - lastAmbientHotzoneActivationAt),
+    sinceTransport: Math.round(Date.now() - lastAmbientTransportInteractionAt),
+    hotzone: {
+      display: hotzoneStyle.display,
+      pointerEvents: hotzoneStyle.pointerEvents,
+      rect: debugRect(ambientControlHotzone),
+      visibility: hotzoneStyle.visibility,
+      zIndex: hotzoneStyle.zIndex,
+    },
+    transport: {
+      pointerEvents: transportStyle.pointerEvents,
+      rect: debugRect(transport),
+      transform: transportStyle.transform,
+      zIndex: transportStyle.zIndex,
+    },
+    ...extra,
+  };
+  const body = JSON.stringify(payload);
+
+  if (navigator.sendBeacon) {
+    navigator.sendBeacon("/api/debug-events", new Blob([body], { type: "application/json" }));
+    return;
+  }
+
+  fetch("/api/debug-events", {
+    body,
+    headers: { "Content-Type": "application/json" },
+    keepalive: true,
+    method: "POST",
+  }).catch(() => {});
+}
+
+function installTouchDebugLogger() {
+  if (!isTouchDebugEnabled) return;
+  const watchedElements = [
+    ["panel", playerPanel],
+    ["hotzone", ambientControlHotzone],
+    ["transport", transport],
+    ["play", playButton],
+    ["prev", prevButton],
+    ["next", nextButton],
+  ];
+  const eventTypes = ["pointerdown", "pointerup", "touchstart", "touchend", "click"];
+
+  for (const [name, element] of watchedElements) {
+    for (const eventType of eventTypes) {
+      element.addEventListener(eventType, (event) => postTouchDebug(`${name}:${eventType}`, event), {
+        capture: true,
+        passive: true,
+      });
+    }
+  }
+}
+
+function showAmbientControls(options = {}) {
+  if (!isAmbientMode) return;
+  const { autoHide = true, duration = 1800 } = options;
+  ambientControlsGeneration += 1;
+  const controlsGeneration = ambientControlsGeneration;
+  window.clearTimeout(ambientControlsTimer);
+  playerPanel.classList.add("ambient-controls-visible");
+  postTouchDebug("show-controls", null, { autoHide, duration, controlsGeneration });
+
+  if (autoHide) {
+    ambientControlsTimer = window.setTimeout(() => {
+      if (controlsGeneration !== ambientControlsGeneration) {
+        postTouchDebug("auto-hide-ignored-stale", null, {
+          controlsGeneration,
+          currentGeneration: ambientControlsGeneration,
+          duration,
+        });
+        return;
+      }
+      if (isAmbientHideTemporarilySuppressed()) {
+        const delay = Math.max(200, ambientHideSuppressedUntil - Date.now());
+        postTouchDebug("auto-hide-delayed-suppressed", null, {
+          controlsGeneration,
+          delay,
+          duration,
+        });
+        showAmbientControls({ autoHide: true, duration: delay });
+        return;
+      }
+      playerPanel.classList.remove("ambient-controls-visible");
+      postTouchDebug("auto-hide-controls", null, { controlsGeneration, duration });
+    }, duration);
+  }
+}
+
+function hideAmbientControls() {
+  ambientControlsGeneration += 1;
+  window.clearTimeout(ambientControlsTimer);
+  playerPanel.classList.remove("ambient-controls-visible");
+  postTouchDebug("hide-controls", null, { controlsGeneration: ambientControlsGeneration });
+}
+
+function clientYFromAmbientEvent(event) {
+  if (Number.isFinite(event.clientY)) return event.clientY;
+  const touch = event.changedTouches?.[0] || event.touches?.[0];
+  return Number.isFinite(touch?.clientY) ? touch.clientY : null;
+}
+
+function markAmbientTransportInteraction() {
+  lastAmbientTransportInteractionAt = Date.now();
+}
+
+function recentlyTouchedAmbientTransport() {
+  return Date.now() - lastAmbientTransportInteractionAt <= AMBIENT_TRANSPORT_INTERACTION_GRACE_MS;
+}
+
+function markAmbientHotzoneActivation() {
+  lastAmbientHotzoneActivationAt = Date.now();
+}
+
+function recentlyActivatedAmbientHotzone() {
+  return Date.now() - lastAmbientHotzoneActivationAt <= AMBIENT_HOTZONE_ACTIVATION_GRACE_MS;
+}
+
+function markAmbientTouchControlActivation() {
+  lastAmbientTouchControlActivationAt = Date.now();
+}
+
+function recentlyActivatedAmbientTouchControl() {
+  return Date.now() - lastAmbientTouchControlActivationAt <= AMBIENT_TOUCH_CONTROL_CLICK_SUPPRESSION_MS;
+}
+
+function suppressAmbientHideAfterReveal() {
+  ambientHideSuppressedUntil = Date.now() + AMBIENT_REVEAL_HIDE_SUPPRESSION_MS;
+}
+
+function isAmbientHideTemporarilySuppressed() {
+  return Date.now() < ambientHideSuppressedUntil;
+}
+
+function eventPathIncludesElement(event, element) {
+  if (!element) return false;
+  const path = typeof event.composedPath === "function" ? event.composedPath() : [];
+  return path.includes(element);
+}
+
+function eventPathHasAmbientControl(event) {
+  const path = typeof event.composedPath === "function" ? event.composedPath() : [];
+  return path.some((node) => {
+    if (!(node instanceof HTMLElement)) return false;
+    return Boolean(node.closest(".transport, button, input, textarea, select, a, .library-panel, .library-scrim"));
+  });
+}
+
+function shouldIgnoreAmbientTapTarget(event) {
+  if (eventPathHasAmbientControl(event)) return true;
+  const target = event.target instanceof HTMLElement ? event.target : null;
+  return Boolean(target?.closest(".transport, button, input, textarea, select, a, .library-panel, .library-scrim"));
+}
+
+function isPointInAmbientTransport(clientY) {
+  const rect = transport.getBoundingClientRect();
+  if (!rect.height) return false;
+  return clientY >= rect.top - 24 && clientY <= rect.bottom + 24;
+}
+
+function isTouchInsideElement(event, element) {
+  const touch = event.changedTouches?.[0] || event.touches?.[0];
+  if (!touch) return true;
+
+  const rect = element.getBoundingClientRect();
+  return (
+    touch.clientX >= rect.left - 10 &&
+    touch.clientX <= rect.right + 10 &&
+    touch.clientY >= rect.top - 10 &&
+    touch.clientY <= rect.bottom + 10
+  );
+}
+
+function handleAmbientPointerMove(event) {
+  if (!isAmbientMode) return;
+  if (isTouchLikePointerEvent(event) && !isDesktopMouseEvent(event)) return;
+
+  const panelRect = playerPanel.getBoundingClientRect();
+  const distanceFromBottom = panelRect.bottom - event.clientY;
+  if (distanceFromBottom <= AMBIENT_DESKTOP_REVEAL_DISTANCE) {
+    showAmbientControls({ autoHide: false });
+  } else {
+    hideAmbientControls();
+  }
+}
+
+function handleAmbientPointerLeave(event) {
+  if (!isAmbientMode) return;
+  if (isTouchLikePointerEvent(event) && !isDesktopMouseEvent(event)) {
+    postTouchDebug("pointerleave-ignored-touch", event);
+    return;
+  }
+
+  hideAmbientControls();
+}
+
+function shouldHandleAmbientTouchSurfaceEvent(event) {
+  if (event.pointerType === "touch" || event.pointerType === "pen") {
+    updateInputModeClasses();
+  }
+  if (event.type.startsWith("touch")) {
+    updateInputModeClasses();
+  }
+
+  if (!isAmbientMode || !isTouchLikePointerEvent(event)) return false;
+  if (isDesktopMouseEvent(event)) return false;
+  if (didMobileSwipe) return false;
+
+  return true;
+}
+
+function activateAmbientControlsFromTouch(event) {
+  postTouchDebug("activate-request", event);
+  if (recentlyActivatedAmbientHotzone()) {
+    suppressAmbientHideAfterReveal();
+    if (typeof event.preventDefault === "function" && event.cancelable) {
+      event.preventDefault();
+    }
+    event.stopPropagation();
+    showAmbientControls({ autoHide: true, duration: AMBIENT_TOUCH_CONTROL_AUTO_HIDE_MS });
+    postTouchDebug("activate-ignored-recent-hotzone", event);
+    return;
+  }
+
+  markAmbientHotzoneActivation();
+  suppressAmbientHideAfterReveal();
+  if (typeof event.preventDefault === "function" && event.cancelable) {
+    event.preventDefault();
+  }
+  event.stopPropagation();
+  showAmbientControls({ autoHide: true, duration: AMBIENT_TOUCH_CONTROL_AUTO_HIDE_MS });
+  postTouchDebug("activate-show-controls", event);
+}
+
+function handleAmbientHotzoneActivation(event) {
+  postTouchDebug("hotzone-handler", event);
+  if (!shouldHandleAmbientTouchSurfaceEvent(event)) {
+    postTouchDebug("hotzone-ignored-surface", event);
+    return;
+  }
+  activateAmbientControlsFromTouch(event);
+}
+
+function handleAmbientPanelRevealFallback(event) {
+  postTouchDebug("panel-reveal-fallback", event);
+  if (!shouldHandleAmbientTouchSurfaceEvent(event)) {
+    postTouchDebug("panel-reveal-ignored-surface", event);
+    return;
+  }
+  if (playerPanel.classList.contains("ambient-controls-visible")) {
+    postTouchDebug("panel-reveal-ignored-visible", event);
+    return;
+  }
+  if (recentlyActivatedAmbientHotzone() || recentlyTouchedAmbientTransport()) {
+    postTouchDebug("panel-reveal-ignored-recent", event);
+    return;
+  }
+  if (eventPathIncludesElement(event, ambientControlHotzone)) {
+    postTouchDebug("panel-reveal-ignored-hotzone-path", event);
+    return;
+  }
+  if (shouldIgnoreAmbientTapTarget(event)) {
+    postTouchDebug("panel-reveal-ignored-control-target", event);
+    return;
+  }
+
+  const clientY = clientYFromAmbientEvent(event);
+  if (!Number.isFinite(clientY)) {
+    postTouchDebug("panel-reveal-ignored-no-y", event);
+    return;
+  }
+
+  const panelRect = playerPanel.getBoundingClientRect();
+  if (panelRect.bottom - clientY > AMBIENT_TOUCH_REVEAL_DISTANCE) {
+    postTouchDebug("panel-reveal-ignored-too-high", event);
+    return;
+  }
+
+  activateAmbientControlsFromTouch(event);
+}
+
+function handleAmbientTouchActivation(event) {
+  postTouchDebug("panel-hide-handler", event);
+  if (!shouldHandleAmbientTouchSurfaceEvent(event)) {
+    postTouchDebug("panel-hide-ignored-surface", event);
+    return;
+  }
+  if (isAmbientHideTemporarilySuppressed()) {
+    postTouchDebug("panel-hide-ignored-suppressed", event);
+    return;
+  }
+  if (recentlyActivatedAmbientHotzone() || recentlyTouchedAmbientTransport()) {
+    postTouchDebug("panel-hide-ignored-recent", event);
+    return;
+  }
+  if (eventPathIncludesElement(event, ambientControlHotzone)) {
+    postTouchDebug("panel-hide-ignored-hotzone-path", event);
+    return;
+  }
+  if (shouldIgnoreAmbientTapTarget(event)) {
+    postTouchDebug("panel-hide-ignored-control-target", event);
+    return;
+  }
+
+  const clientY = clientYFromAmbientEvent(event);
+  const isControlsVisible = playerPanel.classList.contains("ambient-controls-visible");
+  if (!isControlsVisible) {
+    postTouchDebug("panel-hide-ignored-not-visible", event);
+    return;
+  }
+
+  const panelRect = playerPanel.getBoundingClientRect();
+  if (Number.isFinite(clientY) && panelRect.bottom - clientY <= AMBIENT_TOUCH_REVEAL_DISTANCE) {
+    postTouchDebug("panel-hide-ignored-bottom-zone", event);
+    return;
+  }
+
+  if (Number.isFinite(clientY) && isPointInAmbientTransport(clientY)) {
+    postTouchDebug("panel-hide-ignored-transport-point", event);
+    return;
+  }
+
+  postTouchDebug("panel-hide-controls", event);
+  hideAmbientControls();
+}
+
+function suppressLibraryDrawer(isSuppressed) {
+  libraryPanel.hidden = isSuppressed;
+  libraryScrim.hidden = isSuppressed;
+  expandLibraryButton.hidden = isSuppressed;
+}
+
+function setAmbientMode(isEnabled, shouldSave = true) {
+  const nextAmbientMode = Boolean(isEnabled && hasAmbientArtwork);
+  const wasAmbientMode = isAmbientMode;
+  if (nextAmbientMode) {
+    closeLibraryDrawer();
+    suppressLibraryDrawer(true);
+    setLibraryCollapsed(true, false);
+  }
+
+  isAmbientMode = nextAmbientMode;
+  shouldRestoreAmbientMode = nextAmbientMode;
+  appShell.classList.toggle("ambient-mode", nextAmbientMode);
+  playerPanel.classList.toggle("ambient-mode", nextAmbientMode);
+  suppressLibraryDrawer(nextAmbientMode);
+  ambientToggleButton.setAttribute("aria-pressed", String(nextAmbientMode));
+  ambientToggleButton.setAttribute(
+    "aria-label",
+    nextAmbientMode ? "Close atmosphere background" : "Open atmosphere background",
+  );
+  ambientToggleButton.title = nextAmbientMode ? "Close atmosphere background" : "Atmosphere background";
+
+  if (nextAmbientMode) {
+    closeMobileLyrics();
+    if (!wasAmbientMode) {
+      showAmbientControls();
+    }
+  } else {
+    hideAmbientControls();
+  }
+
+  if (shouldSave) {
+    localStorage.setItem(AMBIENT_MODE_KEY, nextAmbientMode ? "true" : "false");
+  }
+}
+
+function setAmbientArtworkUrl(artworkUrl = "", options = {}) {
+  const { preserveMode = false } = options;
+  hasAmbientArtwork = Boolean(artworkUrl);
+  ambientToggleButton.disabled = !hasAmbientArtwork;
+
+  if (!hasAmbientArtwork) {
+    ambientArtwork.removeAttribute("src");
+    ambientBackdropImage.style.backgroundImage = "";
+    if (!preserveMode) {
+      setAmbientMode(false);
+    }
+    return;
+  }
+
+  ambientArtwork.src = artworkUrl;
+  ambientBackdropImage.style.backgroundImage = `url(${JSON.stringify(artworkUrl)})`;
+  if ((isAmbientMode || shouldRestoreAmbientMode) && !phoneControlsHiddenQuery.matches) {
+    setAmbientMode(true, false);
+  }
+}
+
+function getFullscreenElement() {
+  return document.fullscreenElement || document.webkitFullscreenElement || null;
+}
+
+function requestAppFullscreen() {
+  const target = document.documentElement;
+  if (typeof target.requestFullscreen === "function") {
+    return target.requestFullscreen({ navigationUI: "hide" });
+  }
+  if (typeof target.webkitRequestFullscreen === "function") {
+    return target.webkitRequestFullscreen();
+  }
+  return Promise.resolve();
+}
+
+function exitAppFullscreen() {
+  if (typeof document.exitFullscreen === "function") {
+    return document.exitFullscreen();
+  }
+  if (typeof document.webkitExitFullscreen === "function") {
+    return document.webkitExitFullscreen();
+  }
+  return Promise.resolve();
+}
+
+function updateFullscreenButton() {
+  const isFullscreen = Boolean(getFullscreenElement());
+  playerPanel.classList.toggle("is-fullscreen", isFullscreen);
+  fullscreenToggleButton.setAttribute("aria-pressed", String(isFullscreen));
+  fullscreenToggleButton.setAttribute("aria-label", isFullscreen ? "Exit fullscreen" : "Enter fullscreen");
+  fullscreenToggleButton.title = isFullscreen ? "Exit fullscreen" : "Enter fullscreen";
+}
+
+async function toggleAppFullscreen() {
+  try {
+    if (getFullscreenElement()) {
+      await exitAppFullscreen();
+    } else {
+      await requestAppFullscreen();
+    }
+  } catch {
+    // The browser can deny fullscreen outside a trusted click or in some embedded contexts.
+  } finally {
+    updateFullscreenButton();
   }
 }
 
@@ -287,25 +855,50 @@ function shouldIgnoreMobileSwipe(event) {
 
   return Boolean(
     target.closest(
-      "button, input, textarea, select, a, .touch-progress, .controls, .library-panel, .library-scrim, .lyric-seek-button",
+      "button, input, textarea, select, a, .touch-progress, .controls, .transport, .library-panel, .library-scrim, .lyric-seek-button",
     ),
   );
 }
 
-function resetMobileSwipe() {
+function releaseMobileSwipePointer(pointerId) {
+  if (!Number.isFinite(pointerId)) return;
+  const surface = mobileSwipeStart?.surface || deckPanel;
+  if (surface?.hasPointerCapture?.(pointerId)) {
+    try {
+      surface.releasePointerCapture(pointerId);
+    } catch {
+      // Pointer capture may already be gone after a browser-driven cancellation.
+    }
+  }
+}
+
+function resetMobileSwipe(event) {
+  if (event && "pointerId" in event) {
+    releaseMobileSwipePointer(event.pointerId);
+  }
   mobileSwipeStart = null;
 }
 
 function startMobileSwipe(event) {
-  if (!mobileLayoutQuery.matches) return;
-  if (event.pointerType && event.pointerType !== "touch" && event.pointerType !== "pen") return;
+  if (!isTouchLikePointerEvent(event)) return;
+  if (isDesktopMouseEvent(event)) return;
   if (shouldIgnoreMobileSwipe(event)) return;
 
+  const surface = event.currentTarget instanceof HTMLElement ? event.currentTarget : deckPanel;
   mobileSwipeStart = {
     pointerId: event.pointerId,
     x: event.clientX,
     y: event.clientY,
+    surface,
   };
+
+  if (surface?.setPointerCapture) {
+    try {
+      surface.setPointerCapture(event.pointerId);
+    } catch {
+      // Some embedded browsers expose pointer capture but reject it for synthetic events.
+    }
+  }
 }
 
 function finishMobileSwipe(event) {
@@ -315,23 +908,25 @@ function finishMobileSwipe(event) {
   const deltaY = event.clientY - mobileSwipeStart.y;
   const horizontalDistance = Math.abs(deltaX);
   const verticalDistance = Math.abs(deltaY);
-  resetMobileSwipe();
+  resetMobileSwipe(event);
 
   const isHorizontalSwipe =
     horizontalDistance >= MOBILE_SWIPE_MIN_DISTANCE &&
     verticalDistance <= MOBILE_SWIPE_MAX_VERTICAL_DRIFT &&
     horizontalDistance / Math.max(verticalDistance, 1) >= MOBILE_SWIPE_DOMINANCE_RATIO;
 
-  if (!isHorizontalSwipe || !tracks.length) return;
+  if (!isHorizontalSwipe) return;
 
   didMobileSwipe = true;
   event.preventDefault();
   event.stopPropagation();
 
-  if (deltaX < 0) {
-    nextTrack(true, { silentNotAllowed: true });
-  } else {
-    previousSong(true, { silentNotAllowed: true });
+  if (tracks.length) {
+    if (deltaX < 0) {
+      nextTrack(true, { silentNotAllowed: true });
+    } else {
+      previousSong(true, { silentNotAllowed: true });
+    }
   }
 }
 
@@ -404,6 +999,18 @@ function seekFromTouchProgressEvent(event, shouldSave = true) {
   const rect = touchProgress.getBoundingClientRect();
   if (!rect.width) return;
   seekToRatio((event.clientX - rect.left) / rect.width, shouldSave);
+}
+
+function seekBySeconds(seconds) {
+  const duration = audio.duration || 0;
+  if (!Number.isFinite(duration) || duration <= 0) return;
+
+  audio.currentTime = Math.min(duration, Math.max(0, audio.currentTime + seconds));
+  currentTimeEl.textContent = formatTime(audio.currentTime);
+  updateProgressUi();
+  updateActiveLyric();
+  savePlaybackState();
+  updateMediaSessionPosition();
 }
 
 function formatLyricTime(seconds) {
@@ -542,7 +1149,7 @@ function setMediaSessionAction(action, handler) {
 }
 
 function mediaArtworkUrl(track) {
-  const artworkUrl = track?.imageUrl || "./favicon.png";
+  const artworkUrl = track?.imageUrl || DEFAULT_ARTWORK_URL;
   return new URL(artworkUrl, window.location.href).href;
 }
 
@@ -610,13 +1217,118 @@ function shouldIgnoreShortcut(event) {
   if (target.isContentEditable) return true;
   if (target.getAttribute("role") === "slider") return true;
 
-  return ["INPUT", "TEXTAREA", "SELECT", "BUTTON"].includes(target.tagName);
+  return ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName);
+}
+
+function shouldIgnoreSpaceShortcut(event) {
+  const target = event.target;
+  return shouldIgnoreShortcut(event) || (target instanceof HTMLElement && target.tagName === "BUTTON");
+}
+
+function clearPlaybackControlFocus() {
+  const active = document.activeElement;
+  if (!(active instanceof HTMLElement)) return;
+  if (active === document.body) return;
+  if (active.matches("input[type='search'], textarea, select")) return;
+  active.blur();
+}
+
+function handleDesktopArrowShortcut(event) {
+  if (touchGestureQuery.matches && !desktopInputQuery.matches) return false;
+  if (event.metaKey || event.ctrlKey || event.altKey) return false;
+
+  if (event.key === "ArrowLeft") {
+    event.preventDefault();
+    event.stopPropagation();
+    event.stopImmediatePropagation();
+    clearPlaybackControlFocus();
+    seekBySeconds(-KEYBOARD_SEEK_SECONDS);
+    return true;
+  }
+
+  if (event.key === "ArrowRight") {
+    event.preventDefault();
+    event.stopPropagation();
+    event.stopImmediatePropagation();
+    clearPlaybackControlFocus();
+    seekBySeconds(KEYBOARD_SEEK_SECONDS);
+    return true;
+  }
+
+  if (event.key === "ArrowUp") {
+    event.preventDefault();
+    event.stopPropagation();
+    event.stopImmediatePropagation();
+    clearPlaybackControlFocus();
+    return true;
+  }
+
+  if (event.key === "ArrowDown") {
+    event.preventDefault();
+    event.stopPropagation();
+    event.stopImmediatePropagation();
+    clearPlaybackControlFocus();
+    return true;
+  }
+
+  return false;
 }
 
 function togglePlayMode() {
   playMode = playMode === "shuffle" ? "loop" : "shuffle";
   savePlaybackState();
   updateButtons();
+}
+
+function runTransportControlAction(action) {
+  postTouchDebug("transport-control-action");
+  action();
+  if (isAmbientMode) {
+    showAmbientControls({ autoHide: true, duration: AMBIENT_TOUCH_CONTROL_AUTO_HIDE_MS });
+  }
+}
+
+function handleTransportControlClick(event, action) {
+  postTouchDebug("transport-control-click", event);
+  markAmbientTransportInteraction();
+  if (isAmbientMode) {
+    event.stopPropagation();
+  }
+
+  if (recentlyActivatedAmbientTouchControl()) {
+    event.preventDefault();
+    postTouchDebug("transport-control-click-suppressed", event);
+    return;
+  }
+
+  runTransportControlAction(action);
+}
+
+function handleTransportControlTouchEnd(event, action) {
+  postTouchDebug("transport-control-touchend", event);
+  if (!isAmbientMode || !isTouchLikePointerEvent(event) || isDesktopMouseEvent(event)) {
+    postTouchDebug("transport-control-touchend-ignored-surface", event);
+    return;
+  }
+  const control = event.currentTarget instanceof HTMLElement ? event.currentTarget : null;
+  if (control && !isTouchInsideElement(event, control)) {
+    postTouchDebug("transport-control-touchend-ignored-outside", event);
+    return;
+  }
+
+  markAmbientTransportInteraction();
+  markAmbientTouchControlActivation();
+  if (typeof event.preventDefault === "function" && event.cancelable) {
+    event.preventDefault();
+  }
+  event.stopPropagation();
+  postTouchDebug("transport-control-touchend-action", event);
+  runTransportControlAction(action);
+}
+
+function bindTransportControl(button, action) {
+  button.addEventListener("click", (event) => handleTransportControlClick(event, action));
+  button.addEventListener("touchend", (event) => handleTransportControlTouchEnd(event, action), { passive: false });
 }
 
 async function togglePlayback() {
@@ -698,6 +1410,11 @@ function renderPlaylist() {
 }
 
 function openLibraryDrawer() {
+  if (isAmbientMode || appShell.classList.contains("ambient-mode")) {
+    closeLibraryDrawer();
+    return;
+  }
+
   appShell.classList.add("library-drawer-open");
   openLibraryButton.setAttribute("aria-expanded", "true");
 }
@@ -718,6 +1435,24 @@ function setLibraryCollapsed(isCollapsed, shouldSave = true) {
 
 function restoreLibraryCollapsed() {
   setLibraryCollapsed(localStorage.getItem(LIBRARY_COLLAPSED_KEY) === "true", false);
+}
+
+function toggleLibraryPanel() {
+  if (isAmbientMode) {
+    setAmbientMode(false);
+  }
+
+  if (mobileLayoutQuery.matches) {
+    if (appShell.classList.contains("library-drawer-open")) {
+      closeLibraryDrawer();
+    } else {
+      closeMobileLyrics();
+      openLibraryDrawer();
+    }
+    return;
+  }
+
+  setLibraryCollapsed(!appShell.classList.contains("library-collapsed"));
 }
 
 function renderLyrics() {
@@ -766,11 +1501,23 @@ async function loadLyrics(track) {
     const response = await fetch(track.lyricUrl);
     const text = response.ok ? await response.text() : "";
     lyrics = parseLrc(text);
-    renderLyrics();
-    return;
+    if (lyrics.length) {
+      renderLyrics();
+      return;
+    }
+
+    if (await loadOnlineLyrics(track)) {
+      renderLyrics();
+      return;
+    }
   }
 
   if (!track.lyricFile) {
+    if (await loadOnlineLyrics(track)) {
+      renderLyrics();
+      return;
+    }
+
     lyrics = [];
     renderLyrics();
     return;
@@ -778,11 +1525,19 @@ async function loadLyrics(track) {
 
   const text = await track.lyricFile.text();
   lyrics = parseLrc(text);
+  if (!lyrics.length && (await loadOnlineLyrics(track))) {
+    renderLyrics();
+    return;
+  }
+
   renderLyrics();
 }
 
-function clearArtwork() {
+function clearArtwork(options = {}) {
+  const { preserveAmbientMode = false } = options;
+  isUsingFallbackArtwork = false;
   trackArtwork.removeAttribute("src");
+  setAmbientArtworkUrl("", { preserveMode: preserveAmbientMode });
   lyricsStage.classList.remove("has-artwork");
   playerPanel.classList.remove("has-artwork");
   resetTheme();
@@ -791,6 +1546,33 @@ function clearArtwork() {
     URL.revokeObjectURL(currentArtworkObjectUrl);
     currentArtworkObjectUrl = null;
   }
+}
+
+function applyArtworkUrl(artworkUrl, options = {}) {
+  const { isFallback = false } = options;
+  isUsingFallbackArtwork = isFallback;
+  trackArtwork.src = artworkUrl;
+  setAmbientArtworkUrl(artworkUrl);
+  lyricsStage.classList.add("has-artwork");
+  playerPanel.classList.add("has-artwork");
+
+  if (isFallback) {
+    resetTheme();
+    return;
+  }
+
+  if (trackArtwork.complete && trackArtwork.naturalWidth) {
+    updateThemeFromArtwork(trackArtwork);
+  }
+}
+
+function applyFallbackArtwork() {
+  if (currentArtworkObjectUrl) {
+    URL.revokeObjectURL(currentArtworkObjectUrl);
+    currentArtworkObjectUrl = null;
+  }
+
+  applyArtworkUrl(DEFAULT_ARTWORK_URL, { isFallback: true });
 }
 
 function artworkUrlFromMediaUrl(mediaUrl) {
@@ -802,24 +1584,65 @@ function artworkUrlFromMediaUrl(mediaUrl) {
   return `/api/artwork?file=${encodeURIComponent(fileName)}`;
 }
 
+function lyricsLookupUrlFromMediaUrl(mediaUrl) {
+  if (!mediaUrl) return "";
+  const url = new URL(mediaUrl, window.location.href);
+  if (url.pathname !== "/api/media") return "";
+  const fileName = url.searchParams.get("file");
+  if (!fileName) return "";
+  return `/api/lyrics?file=${encodeURIComponent(fileName)}`;
+}
+
+async function loadOnlineLyrics(track) {
+  if (track.lyricsLookupFailed) return false;
+
+  const lookupUrl = lyricsLookupUrlFromMediaUrl(track.audioUrl);
+  if (!lookupUrl) return false;
+
+  try {
+    const response = await fetch(lookupUrl);
+    const payload = response.ok ? await response.json() : null;
+    if (!payload?.lyricUrl) {
+      track.lyricsLookupFailed = true;
+      return false;
+    }
+
+    const lyricResponse = await fetch(payload.lyricUrl);
+    const text = lyricResponse.ok ? await lyricResponse.text() : "";
+    const downloadedLyrics = parseLrc(text);
+    if (!downloadedLyrics.length) {
+      track.lyricsLookupFailed = true;
+      return false;
+    }
+
+    track.lyricUrl = payload.lyricUrl;
+    track.lyricSource = payload.source || "online";
+    lyrics = downloadedLyrics;
+    return true;
+  } catch {
+    track.lyricsLookupFailed = true;
+    return false;
+  }
+}
+
 async function loadArtwork(track) {
-  clearArtwork();
-  if (!track) return;
+  clearArtwork({ preserveAmbientMode: isAmbientMode || shouldRestoreAmbientMode });
+  if (!track) {
+    applyFallbackArtwork();
+    return;
+  }
 
   let artworkUrl = track.imageUrl || artworkUrlFromMediaUrl(track.audioUrl);
   if (!artworkUrl && track.imageFile) {
     currentArtworkObjectUrl = URL.createObjectURL(track.imageFile);
     artworkUrl = currentArtworkObjectUrl;
   }
-  if (!artworkUrl) return;
-
-  trackArtwork.src = artworkUrl;
-  lyricsStage.classList.add("has-artwork");
-  playerPanel.classList.add("has-artwork");
-
-  if (trackArtwork.complete && trackArtwork.naturalWidth) {
-    updateThemeFromArtwork(trackArtwork);
+  if (!artworkUrl) {
+    applyFallbackArtwork();
+    return;
   }
+
+  applyArtworkUrl(artworkUrl);
 }
 
 function recordHistory(index) {
@@ -1099,12 +1922,27 @@ searchInput.addEventListener("input", () => {
   renderPlaylist();
 });
 
-playButton.addEventListener("click", togglePlayback);
+bindTransportControl(playButton, togglePlayback);
+bindTransportControl(prevButton, previousTrack);
+bindTransportControl(nextButton, () => nextTrack(true));
+bindTransportControl(playModeButton, togglePlayMode);
 
-prevButton.addEventListener("click", previousTrack);
-nextButton.addEventListener("click", () => nextTrack(true));
+ambientToggleButton.addEventListener("pointerdown", (event) => {
+  event.stopPropagation();
+});
 
-playModeButton.addEventListener("click", togglePlayMode);
+ambientToggleButton.addEventListener("click", (event) => {
+  event.stopPropagation();
+  setAmbientMode(!isAmbientMode);
+});
+
+fullscreenToggleButton.addEventListener("click", (event) => {
+  event.stopPropagation();
+  toggleAppFullscreen();
+});
+
+document.addEventListener("fullscreenchange", updateFullscreenButton);
+document.addEventListener("webkitfullscreenchange", updateFullscreenButton);
 
 progress.addEventListener("input", () => {
   isSeeking = true;
@@ -1154,10 +1992,10 @@ touchProgress.addEventListener("keydown", (event) => {
   const duration = audio.duration || 0;
   if (!Number.isFinite(duration) || duration <= 0) return;
 
-  if (event.key === "ArrowLeft" || event.key === "ArrowDown") {
+  if (event.key === "ArrowLeft") {
     event.preventDefault();
     audio.currentTime = Math.max(0, audio.currentTime - 5);
-  } else if (event.key === "ArrowRight" || event.key === "ArrowUp") {
+  } else if (event.key === "ArrowRight") {
     event.preventDefault();
     audio.currentTime = Math.min(duration, audio.currentTime + 5);
   } else {
@@ -1173,9 +2011,37 @@ touchProgress.addEventListener("keydown", (event) => {
 
 lyricsEl.addEventListener("scroll", selectLyricNearCenter, { passive: true });
 
-playerPanel.addEventListener("pointerdown", startMobileSwipe);
-playerPanel.addEventListener("pointerup", finishMobileSwipe);
-playerPanel.addEventListener("pointercancel", resetMobileSwipe);
+deckPanel.addEventListener("pointerdown", startMobileSwipe);
+deckPanel.addEventListener("pointerup", finishMobileSwipe);
+deckPanel.addEventListener("pointercancel", resetMobileSwipe);
+recordFrame.addEventListener("pointerdown", (event) => {
+  if (!desktopInputQuery.matches) return;
+  event.preventDefault();
+  clearPlaybackControlFocus();
+});
+playerPanel.addEventListener("pointermove", handleAmbientPointerMove);
+playerPanel.addEventListener("pointerleave", handleAmbientPointerLeave);
+playerPanel.addEventListener("pointerdown", handleAmbientPanelRevealFallback, { capture: true });
+playerPanel.addEventListener("touchstart", handleAmbientPanelRevealFallback, { capture: true, passive: false });
+ambientControlHotzone.addEventListener("pointerdown", handleAmbientHotzoneActivation);
+ambientControlHotzone.addEventListener("pointerup", handleAmbientHotzoneActivation);
+ambientControlHotzone.addEventListener("touchstart", handleAmbientHotzoneActivation, { passive: false });
+ambientControlHotzone.addEventListener("touchend", handleAmbientHotzoneActivation, { passive: false });
+ambientControlHotzone.addEventListener("click", handleAmbientHotzoneActivation);
+transport.addEventListener("pointerenter", () => showAmbientControls({ autoHide: !desktopInputQuery.matches }));
+transport.addEventListener("pointermove", () => showAmbientControls({ autoHide: !desktopInputQuery.matches }));
+transport.addEventListener("focusin", () => showAmbientControls({ autoHide: false }));
+transport.addEventListener("pointerdown", (event) => {
+  markAmbientTransportInteraction();
+  if (!isAmbientMode || !isTouchLikePointerEvent(event) || isDesktopMouseEvent(event)) return;
+  showAmbientControls({ autoHide: true, duration: 2600 });
+});
+transport.addEventListener("pointerup", markAmbientTransportInteraction);
+transport.addEventListener("touchstart", markAmbientTransportInteraction, { passive: true });
+transport.addEventListener("touchend", markAmbientTransportInteraction, { passive: true });
+transport.addEventListener("click", markAmbientTransportInteraction);
+playerPanel.addEventListener("touchend", handleAmbientTouchActivation, { passive: true });
+playerPanel.addEventListener("click", handleAmbientTouchActivation);
 
 audio.addEventListener("loadedmetadata", () => {
   durationEl.textContent = formatTime(audio.duration);
@@ -1208,12 +2074,30 @@ audio.addEventListener("pause", () => {
   updateButtons();
 });
 audio.addEventListener("ended", () => nextTrack(true));
-trackArtwork.addEventListener("load", () => updateThemeFromArtwork(trackArtwork));
-trackArtwork.addEventListener("error", clearArtwork);
+trackArtwork.addEventListener("load", () => {
+  if (isUsingFallbackArtwork) {
+    resetTheme();
+    return;
+  }
+
+  updateThemeFromArtwork(trackArtwork);
+});
+trackArtwork.addEventListener("error", () => {
+  if (isUsingFallbackArtwork) {
+    clearArtwork({ preserveAmbientMode: isAmbientMode || shouldRestoreAmbientMode });
+    return;
+  }
+
+  applyFallbackArtwork();
+});
 tonearm.addEventListener("animationend", () => {
   tonearm.classList.remove("is-swinging");
 });
 recordFrame.addEventListener("click", (event) => {
+  if (didMobileSwipe) {
+    didMobileSwipe = false;
+    return;
+  }
   if (!mobileLayoutQuery.matches) return;
   event.stopPropagation();
   openMobileLyrics();
@@ -1239,28 +2123,47 @@ expandLibraryButton.addEventListener("click", () => setLibraryCollapsed(false));
 libraryScrim.addEventListener("click", closeLibraryDrawer);
 
 document.addEventListener("keydown", (event) => {
-  if (shouldIgnoreShortcut(event)) return;
-
   if (event.key === "Escape") {
+    if (isAmbientMode) {
+      event.preventDefault();
+      setAmbientMode(false);
+      return;
+    }
+
+    if (shouldIgnoreShortcut(event)) return;
     closeLibraryDrawer();
     return;
   }
 
-  if (event.key === " " || event.code === "Space") {
+  if (handleDesktopArrowShortcut(event)) return;
+
+  if (shouldIgnoreShortcut(event)) return;
+  if (event.metaKey || event.ctrlKey || event.altKey) return;
+
+  if (!shouldIgnoreSpaceShortcut(event) && (event.key === " " || event.code === "Space")) {
     event.preventDefault();
     togglePlayback();
     return;
   }
 
   const shortcut = event.key.toLowerCase();
-  if (shortcut === "p") {
+  if (shortcut === "f") {
+    event.preventDefault();
+    toggleAppFullscreen();
+  } else if (shortcut === "i") {
+    event.preventDefault();
+    setAmbientMode(!isAmbientMode);
+  } else if (shortcut === "l") {
+    event.preventDefault();
+    toggleLibraryPanel();
+  } else if (shortcut === "p") {
     previousSong(true);
   } else if (shortcut === "n") {
     nextTrack(true);
   } else if (shortcut === "r") {
     togglePlayMode();
   }
-});
+}, { capture: true });
 
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "hidden") {
@@ -1283,7 +2186,23 @@ mobileLayoutQuery.addEventListener("change", () => {
   closeMobileLyrics();
 });
 
+touchLayoutQuery.addEventListener("change", resetMobileSwipe);
+touchGestureQuery.addEventListener("change", () => {
+  resetMobileSwipe();
+  updateInputModeClasses();
+});
+desktopInputQuery.addEventListener("change", updateInputModeClasses);
+
+phoneControlsHiddenQuery.addEventListener("change", () => {
+  if (phoneControlsHiddenQuery.matches && isAmbientMode) {
+    setAmbientMode(false, false);
+  }
+});
+
+installTouchDebugLogger();
+updateInputModeClasses();
 restoreLibraryCollapsed();
 setupMediaSession();
+updateFullscreenButton();
 updateButtons();
 loadServerLibrary();

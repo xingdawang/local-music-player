@@ -3,11 +3,14 @@ from __future__ import annotations
 import json
 import mimetypes
 import shutil
+import time
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from threading import Lock
 from urllib.parse import parse_qs, unquote, urlencode, urlparse
 from urllib.request import Request, urlopen
 
+from mutagen import File as MutagenFile
 from mutagen.id3 import ID3, ID3NoHeaderError
 from pypinyin import Style, lazy_pinyin
 
@@ -17,6 +20,11 @@ DEFAULT_MUSIC_DIR = Path("/Users/xingdawang/Music/Converted Music")
 AUDIO_EXTENSIONS = {".mp3", ".flac", ".wav", ".m4a", ".ogg", ".aac"}
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".avif"}
 ARTWORK_SEARCH_TIMEOUT = 8
+LYRICS_SEARCH_TIMEOUT = 8
+LYRICS_PROVIDER_URL = "https://lrclib.net/api/search"
+DEBUG_EVENTS_LIMIT = 600
+DEBUG_EVENTS: list[dict[str, object]] = []
+DEBUG_EVENTS_LOCK = Lock()
 
 
 class MusicPlayerHandler(SimpleHTTPRequestHandler):
@@ -39,7 +47,24 @@ class MusicPlayerHandler(SimpleHTTPRequestHandler):
             self.send_artwork(parsed.query)
             return
 
+        if parsed.path == "/api/lyrics":
+            self.send_lyrics(parsed.query)
+            return
+
+        if parsed.path == "/api/debug-events":
+            self.send_debug_events(parsed.query)
+            return
+
         super().do_GET()
+
+    def do_POST(self) -> None:
+        parsed = urlparse(self.path)
+
+        if parsed.path == "/api/debug-events":
+            self.receive_debug_event()
+            return
+
+        self.send_error(404, "Not found")
 
     def send_json(self, payload: object, status: int = 200) -> None:
         data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
@@ -48,6 +73,50 @@ class MusicPlayerHandler(SimpleHTTPRequestHandler):
         self.send_header("Content-Length", str(len(data)))
         self.end_headers()
         self.wfile.write(data)
+
+    def send_debug_events(self, query: str) -> None:
+        params = parse_qs(query)
+        try:
+            limit = int(params.get("limit", [DEBUG_EVENTS_LIMIT])[0])
+        except ValueError:
+            limit = DEBUG_EVENTS_LIMIT
+        limit = max(1, min(DEBUG_EVENTS_LIMIT, limit))
+
+        with DEBUG_EVENTS_LOCK:
+            if params.get("clear", ["0"])[0] == "1":
+                DEBUG_EVENTS.clear()
+            events = list(DEBUG_EVENTS[-limit:])
+
+        self.send_json({"ok": True, "count": len(events), "events": events})
+
+    def receive_debug_event(self) -> None:
+        try:
+            content_length = int(self.headers.get("Content-Length", "0") or 0)
+        except ValueError:
+            self.send_error(400, "Invalid Content-Length")
+            return
+
+        if content_length <= 0 or content_length > 65536:
+            self.send_error(400, "Invalid debug payload")
+            return
+
+        try:
+            payload = json.loads(self.rfile.read(content_length).decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            self.send_error(400, "Invalid JSON")
+            return
+
+        if not isinstance(payload, dict):
+            self.send_error(400, "Invalid debug event")
+            return
+
+        payload["_serverTime"] = time.time()
+        with DEBUG_EVENTS_LOCK:
+            DEBUG_EVENTS.append(payload)
+            del DEBUG_EVENTS[:-DEBUG_EVENTS_LIMIT]
+            count = len(DEBUG_EVENTS)
+
+        self.send_json({"ok": True, "count": count})
 
     def send_tracks(self) -> None:
         music_dir = DEFAULT_MUSIC_DIR.expanduser().resolve()
@@ -188,6 +257,35 @@ class MusicPlayerHandler(SimpleHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
+    def send_lyrics(self, query: str) -> None:
+        file_names = parse_qs(query).get("file", [])
+        if not file_names:
+            self.send_error(400, "Missing file parameter")
+            return
+
+        music_dir = DEFAULT_MUSIC_DIR.expanduser().resolve()
+        requested = (music_dir / file_names[0]).resolve()
+        if music_dir not in requested.parents and requested != music_dir:
+            self.send_error(403, "File is outside the music folder")
+            return
+        if not requested.exists() or not requested.is_file() or requested.suffix.lower() not in AUDIO_EXTENSIONS:
+            self.send_error(404, "File not found")
+            return
+
+        lyric_path, source = find_lyrics_for_audio(requested)
+        if not lyric_path:
+            self.send_json({"ok": False, "error": "Lyrics not found"}, status=404)
+            return
+
+        self.send_json(
+            {
+                "ok": True,
+                "source": source,
+                "lyricFile": lyric_path.name,
+                "lyricUrl": f"/api/media?file={quote_path(lyric_path.name)}",
+            }
+        )
+
 
 def parse_track_name(stem: str) -> tuple[str, str]:
     parts = stem.split(" - ", 1)
@@ -248,6 +346,170 @@ def guess_media_type(path: Path) -> str:
     if path.suffix.lower() == ".lrc":
         return "text/plain; charset=utf-8"
     return "application/octet-stream"
+
+
+def local_lyric_path(audio_path: Path) -> Path | None:
+    candidate = audio_path.with_suffix(".lrc")
+    if candidate.exists() and candidate.is_file():
+        return candidate
+    return None
+
+
+def is_valid_lrc_text(text: str) -> bool:
+    for line in text.splitlines():
+        if parse_lrc_timestamped_line(line):
+            return True
+    return False
+
+
+def is_valid_lrc_file(path: Path) -> bool:
+    try:
+        return is_valid_lrc_text(path.read_text(encoding="utf-8-sig"))
+    except UnicodeDecodeError:
+        try:
+            return is_valid_lrc_text(path.read_text(encoding="gb18030"))
+        except Exception:
+            return False
+    except Exception:
+        return False
+
+
+def parse_lrc_timestamped_line(line: str) -> bool:
+    index = 0
+    while index < len(line):
+        start = line.find("[", index)
+        if start == -1:
+            return False
+        end = line.find("]", start + 1)
+        if end == -1:
+            return False
+        stamp = line[start + 1 : end]
+        minutes, separator, rest = stamp.partition(":")
+        if separator and minutes.isdigit():
+            seconds, dot, fraction = rest.partition(".")
+            if seconds.isdigit() and len(seconds) == 2 and (not dot or fraction.isdigit()):
+                return True
+        index = end + 1
+    return False
+
+
+def find_lyrics_for_audio(audio_path: Path) -> tuple[Path, str] | tuple[None, None]:
+    local_path = local_lyric_path(audio_path)
+    if local_path and is_valid_lrc_file(local_path):
+        return local_path, "local"
+
+    downloaded_path = download_online_lyrics(audio_path)
+    if downloaded_path:
+        return downloaded_path, "lrclib"
+
+    return None, None
+
+
+def download_online_lyrics(audio_path: Path) -> Path | None:
+    artist, title = parse_track_name(audio_path.stem)
+    candidates = search_lrclib_lyrics(artist, title, audio_duration_seconds(audio_path))
+    lyrics_text = select_synced_lyrics(candidates, artist, title)
+    if not lyrics_text:
+        return None
+
+    target_path = audio_path.with_suffix(".lrc")
+    if target_path.exists() and is_valid_lrc_file(target_path):
+        return target_path
+
+    if target_path.exists():
+        try:
+            backup_invalid_lyric(target_path)
+        except OSError:
+            return None
+
+    try:
+        target_path.write_text(lyrics_text.rstrip() + "\n", encoding="utf-8")
+    except Exception:
+        return None
+
+    if not is_valid_lrc_file(target_path):
+        try:
+            target_path.unlink()
+        except OSError:
+            pass
+        return None
+
+    return target_path
+
+
+def backup_invalid_lyric(path: Path) -> None:
+    for index in range(1, 100):
+        suffix = ".invalid" if index == 1 else f".invalid.{index}"
+        backup_path = path.with_name(f"{path.name}{suffix}")
+        if not backup_path.exists():
+            path.rename(backup_path)
+            return
+
+
+def audio_duration_seconds(path: Path) -> int | None:
+    try:
+        audio = MutagenFile(path)
+    except Exception:
+        return None
+    duration = getattr(getattr(audio, "info", None), "length", None)
+    if not isinstance(duration, (int, float)) or duration <= 0:
+        return None
+    return round(duration)
+
+
+def search_lrclib_lyrics(artist: str, title: str, duration: int | None = None) -> list[dict[str, object]]:
+    params = {"artist_name": artist, "track_name": title}
+    if duration:
+        params["duration"] = str(duration)
+
+    request = Request(
+        f"{LYRICS_PROVIDER_URL}?{urlencode(params)}",
+        headers={"User-Agent": "LocalMusicPlayer/0.1 (https://localhost)"},
+    )
+    try:
+        with urlopen(request, timeout=LYRICS_SEARCH_TIMEOUT) as response:
+            payload = json.load(response)
+    except Exception:
+        return []
+
+    if not isinstance(payload, list):
+        return []
+    return [item for item in payload if isinstance(item, dict)]
+
+
+def select_synced_lyrics(candidates: list[dict[str, object]], artist: str, title: str) -> str | None:
+    ranked = sorted(candidates, key=lambda item: lyric_candidate_score(item, artist, title), reverse=True)
+    for candidate in ranked:
+        lyrics_text = candidate.get("syncedLyrics")
+        if isinstance(lyrics_text, str) and is_valid_lrc_text(lyrics_text):
+            return lyrics_text
+    return None
+
+
+def lyric_candidate_score(candidate: dict[str, object], artist: str, title: str) -> int:
+    score = 0
+    candidate_title = normalize_match_text(str(candidate.get("trackName", "")))
+    candidate_artist = normalize_match_text(str(candidate.get("artistName", "")))
+    target_title = normalize_match_text(title)
+    target_artist = normalize_match_text(artist)
+
+    if candidate_title == target_title:
+        score += 6
+    elif target_title and (target_title in candidate_title or candidate_title in target_title):
+        score += 2
+
+    if candidate_artist == target_artist:
+        score += 4
+    elif target_artist and (target_artist in candidate_artist or candidate_artist in target_artist):
+        score += 1
+
+    if isinstance(candidate.get("syncedLyrics"), str):
+        score += 3
+    return score
+
+
+def normalize_match_text(text: str) -> str:
+    return "".join(character.casefold() for character in text if character.isalnum())
 
 
 def extract_embedded_artwork(path: Path) -> tuple[str, bytes] | None:

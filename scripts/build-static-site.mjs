@@ -7,7 +7,15 @@ const packageJson = JSON.parse(await readFile(join(rootDir, "package.json"), "ut
 const version = packageJson.version;
 const outDir = join(rootDir, "dist", `music-player-static-v${version}`);
 
-const staticFiles = ["index.html", "app.js", "styles.css", "favicon.png"];
+const staticFiles = [
+  "index.html",
+  "app.js",
+  "styles.css",
+  "favicon.png",
+  "app-icon-192.png",
+  "app-icon-512.png",
+  "manifest.webmanifest",
+];
 
 await rm(outDir, { recursive: true, force: true });
 await mkdir(outDir, { recursive: true });
