@@ -82,7 +82,7 @@ input {
   display: none;
 }
 
-.app-shell.touch-device .fullscreen-toggle {
+.app-shell.mobile-device .fullscreen-toggle {
   display: none;
 }
 
@@ -736,6 +736,10 @@ button:hover {
   min-width: 0;
   margin-top: 1.25rem;
   text-align: center;
+  caret-color: transparent;
+  cursor: default;
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 .track-copy .eyebrow {
@@ -747,11 +751,17 @@ button:hover {
   color: #ffffff;
   font-size: clamp(1.55rem, 3vw, 2.45rem);
   line-height: 1.1;
+  caret-color: transparent;
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 .track-copy p:last-child {
   color: rgba(237, 242, 237, 0.68);
   margin-bottom: 0;
+  caret-color: transparent;
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 .lyrics-stage {
@@ -1024,10 +1034,6 @@ button:hover {
     touch-action: manipulation;
   }
 
-  .fullscreen-toggle {
-    display: none;
-  }
-
   .progress {
     display: none;
   }
@@ -1073,12 +1079,6 @@ button:hover {
   .touch-progress:focus-visible .touch-progress-track {
     outline: 2px solid #d5e4dc;
     outline-offset: 0.45rem;
-  }
-}
-
-@media (any-pointer: coarse), (hover: none) {
-  .fullscreen-toggle {
-    display: none;
   }
 }
 
@@ -1626,7 +1626,12 @@ button:disabled {
   }
 
   .search-panel {
-    display: none;
+    padding: 0.65rem 1rem;
+  }
+
+  .search-panel input {
+    min-height: 2.65rem;
+    font-size: 1rem;
   }
 
   .transport {

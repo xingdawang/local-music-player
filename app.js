@@ -325,6 +325,13 @@ function isTouchCapableDevice() {
   return navigator.maxTouchPoints > 0 || touchInputQuery.matches;
 }
 
+function isMobileOrTabletDevice() {
+  const userAgent = navigator.userAgent || "";
+  const platform = navigator.platform || "";
+  const isIpadOSDesktopMode = platform === "MacIntel" && navigator.maxTouchPoints > 1;
+  return /Android|iPad|iPhone|iPod|Kindle|Mobile|PlayBook|Silk|Tablet/i.test(userAgent) || isIpadOSDesktopMode;
+}
+
 function isTouchLikePointerEvent(event) {
   return (
     event.pointerType === "touch" ||
@@ -340,6 +347,7 @@ function isDesktopMouseEvent(event) {
 
 function updateInputModeClasses() {
   appShell.classList.toggle("touch-device", isTouchCapableDevice());
+  appShell.classList.toggle("mobile-device", isMobileOrTabletDevice());
 }
 
 function debugElementLabel(node) {
@@ -2157,8 +2165,10 @@ document.addEventListener("keydown", (event) => {
     event.preventDefault();
     toggleLibraryPanel();
   } else if (shortcut === "p") {
-    previousSong(true);
+    event.preventDefault();
+    previousTrack();
   } else if (shortcut === "n") {
+    event.preventDefault();
     nextTrack(true);
   } else if (shortcut === "r") {
     togglePlayMode();
